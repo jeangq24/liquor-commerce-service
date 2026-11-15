@@ -14,6 +14,18 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import {
+  FULFILLMENT_TYPES,
+  INVENTORY_RESERVATION_STATUSES,
+  InventoryReservationStatus,
+  ORDER_STATUSES,
+  OrderStatus,
+} from '../../../modules/orders/order.constants.js';
+import {
+  PAYMENT_METHODS,
+  PAYMENT_STATUSES,
+  PaymentStatus,
+} from '../../../modules/payments/payment.constants.js';
 
 export const commerceSchema = pgSchema('commerce');
 
@@ -28,42 +40,30 @@ export const cartStatusEnum = commerceSchema.enum('cart_status', [
   'ABANDONED',
 ]);
 
-export const fulfillmentTypeEnum = commerceSchema.enum('fulfillment_type', [
-  'DELIVERY',
-  'PICKUP',
-]);
+export const fulfillmentTypeEnum = commerceSchema.enum(
+  'fulfillment_type',
+  FULFILLMENT_TYPES,
+);
 
-export const orderStatusEnum = commerceSchema.enum('order_status', [
-  'PENDING',
-  'CONFIRMED',
-  'PREPARING',
-  'READY',
-  'ON_DELIVERY',
-  'DELIVERY_FAILED',
-  'RETURNED_TO_STORE',
-  'DELIVERED',
-  'PICKED_UP',
-  'CANCELLED',
-]);
+export const orderStatusEnum = commerceSchema.enum(
+  'order_status',
+  ORDER_STATUSES,
+);
 
 export const inventoryReservationStatusEnum = commerceSchema.enum(
   'inventory_reservation_status',
-  ['PENDING', 'RESERVED', 'RELEASED', 'DISPATCHED', 'FAILED'],
+  INVENTORY_RESERVATION_STATUSES,
 );
 
-export const paymentMethodEnum = commerceSchema.enum('payment_method', [
-  'CASH',
-  'BANK_TRANSFER',
-]);
+export const paymentMethodEnum = commerceSchema.enum(
+  'payment_method',
+  PAYMENT_METHODS,
+);
 
-export const paymentStatusEnum = commerceSchema.enum('payment_status', [
-  'PENDING',
-  'UNDER_REVIEW',
-  'APPROVED',
-  'REJECTED',
-  'REFUNDED',
-  'CANCELLED',
-]);
+export const paymentStatusEnum = commerceSchema.enum(
+  'payment_status',
+  PAYMENT_STATUSES,
+);
 
 export const deliveryAttemptStatusEnum = commerceSchema.enum(
   'delivery_attempt_status',
@@ -159,13 +159,13 @@ export const orders = commerceSchema.table(
     customerName: varchar('customer_name', { length: 180 }).notNull(),
     customerPhone: varchar('customer_phone', { length: 30 }).notNull(),
     customerEmail: varchar('customer_email', { length: 180 }),
-    status: orderStatusEnum('status').notNull().default('PENDING'),
+    status: orderStatusEnum('status').notNull().default(OrderStatus.PENDING),
     fulfillmentType: fulfillmentTypeEnum('fulfillment_type').notNull(),
     inventoryReservationStatus: inventoryReservationStatusEnum(
       'inventory_reservation_status',
     )
       .notNull()
-      .default('PENDING'),
+      .default(InventoryReservationStatus.PENDING),
     subtotalCop: bigint('subtotal_cop', { mode: 'bigint' }).notNull(),
     discountCop: bigint('discount_cop', { mode: 'bigint' })
       .notNull()
@@ -245,7 +245,7 @@ export const orderInventoryReservations = commerceSchema.table(
     locationId: uuid('location_id').notNull(),
     status: inventoryReservationStatusEnum('status')
       .notNull()
-      .default('RESERVED'),
+      .default(InventoryReservationStatus.RESERVED),
     createdAt: timestamp('created_at', {
       withTimezone: true,
       mode: 'date',
@@ -343,7 +343,9 @@ export const payments = commerceSchema.table(
     id: uuid('id').defaultRandom().primaryKey(),
     orderId: uuid('order_id').notNull(),
     method: paymentMethodEnum('method').notNull(),
-    status: paymentStatusEnum('status').notNull().default('PENDING'),
+    status: paymentStatusEnum('status')
+      .notNull()
+      .default(PaymentStatus.PENDING),
     amountCop: bigint('amount_cop', { mode: 'bigint' }).notNull(),
     reference: varchar('reference', { length: 180 }),
     proofPath: text('proof_path'),

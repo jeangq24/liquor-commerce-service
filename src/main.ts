@@ -5,11 +5,11 @@ import figlet from 'figlet';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(process.env.PORT ?? 3001);
    const amarillo = '\x1b[33m';
   const reset = '\x1b[0m';
 
-   const banner = figlet.textSync('LicoresYaaa - inventory', {
+   const banner = figlet.textSync('LicoresYaaa - Commerce', {
     horizontalLayout: 'controlled smushing',
   });
 
