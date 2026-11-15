@@ -20,6 +20,7 @@ Antes de proponer arquitectura, crear módulos o escribir lógica de negocio, co
 * **Manejo de Errores:** Usa las excepciones nativas de NestJS (`BadRequestException`, `NotFoundException`, `ForbiddenException`, etc.) o los filtros globales definidos en la dirección técnica.
 * **Código Autodocumentado:** Escribe nombres descriptivos en inglés para código (clases, métodos, variables) y comentarios claros en español solo cuando la lógica de negocio sea compleja. uss JSDoc y cuando el comentario sea necesario no te extiendas en cosas inecesarias.
 
+## REGLAS ##
 Prácticas Adicionales de Clean Code
 Responsabilidad Única (SRP) en Servicios: Evita los God Services. Si un servicio crece demasiado, divídelo en servicios más pequeños y enfocados, o extrae casos de uso específicos (ej. CreateOrderUseCase).
 

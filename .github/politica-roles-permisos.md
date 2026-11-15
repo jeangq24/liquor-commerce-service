@@ -194,8 +194,10 @@ inventory.stock.return	Registrar devoluciones verificadas físicamente.
 commerce.orders.read	Consultar pedidos.
 commerce.orders.update_status	Actualizar estados de pedidos.
 commerce.orders.cancel	Cancelar pedidos.
+commerce.payments.read	Consultar pagos.
 commerce.payments.review	Revisar comprobantes.
 commerce.payments.approve	Aprobar pagos.
+commerce.payments.record_cash	Registrar pagos en efectivo recibidos.
 promotions.coupons.manage	Administrar cupones.
 users.internal.read	Consultar usuarios internos.
 users.internal.manage	Administrar usuarios internos.
