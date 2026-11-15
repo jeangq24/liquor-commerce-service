@@ -14,6 +14,12 @@ import {
 import { CartsService } from './carts.service.js';
 import { CheckoutService } from './checkout.service.js';
 import { CommerceRepository } from './commerce.repository.js';
+import {
+  CARTS_REPOSITORY,
+  ORDERS_REPOSITORY,
+  PAYMENTS_REPOSITORY,
+} from './commerce.repository.port.js';
+import { CommerceResponseMapper } from './commerce-response.mapper.js';
 import { OrdersApiService } from './orders-api.service.js';
 import { PaymentsApiService } from './payments-api.service.js';
 
@@ -32,6 +38,19 @@ import { PaymentsApiService } from './payments-api.service.js';
   ],
   providers: [
     CommerceRepository,
+    {
+      provide: CARTS_REPOSITORY,
+      useExisting: CommerceRepository,
+    },
+    {
+      provide: ORDERS_REPOSITORY,
+      useExisting: CommerceRepository,
+    },
+    {
+      provide: PAYMENTS_REPOSITORY,
+      useExisting: CommerceRepository,
+    },
+    CommerceResponseMapper,
     CommerceInternalAuthGuard,
     CommercePermissionGuard,
     CartsService,

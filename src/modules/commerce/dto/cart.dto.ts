@@ -13,35 +13,35 @@ export class CreateCartDto {
   @IsOptional()
   @IsString()
   @MaxLength(180)
-  sessionId?: string;
+  readonly sessionId?: string;
 }
 
 export class AddCartItemDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  variantId!: string;
+  readonly variantId!: string;
 
   @ApiProperty({ minimum: 1 })
   @IsInt()
   @Min(1)
-  quantity!: number;
+  readonly quantity!: number;
 }
 
 export class UpdateCartItemDto {
   @ApiProperty({ minimum: 1 })
   @IsInt()
   @Min(1)
-  quantity!: number;
+  readonly quantity!: number;
 }
 
 export class CartIdParamsDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  cartId!: string;
+  readonly cartId!: string;
 }
 
 export class CartItemParamsDto extends CartIdParamsDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  itemId!: string;
+  readonly itemId!: string;
 }

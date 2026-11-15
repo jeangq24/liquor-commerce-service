@@ -1,11 +1,15 @@
 import {
   ConflictException,
+  InternalServerErrorException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDrizzle } from '@nestjs/drizzle';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import type { Database } from '../../infrastructure/database/database.types.js';
+import type {
+  Database,
+  DatabaseTransaction,
+} from '../../infrastructure/database/database.types.js';
 import {
   carts,
   cartItems,
@@ -14,7 +18,6 @@ import {
   orderInventoryReservations,
   orderItems,
   orders,
-  outboxEvents,
   payments,
 } from '../../infrastructure/database/schema/commerce.schema.js';
 import {
@@ -22,14 +25,24 @@ import {
   OrderStatus,
   type OrderStatus as OrderStatusValue,
 } from '../orders/order.constants.js';
+import {
+  CustomerType,
+  DeliveryAttemptMutationKind,
+  DeliveryAttemptStatus,
+} from './commerce.constants.js';
 import { PaymentStatus } from '../payments/payment.constants.js';
+import type { InventoryItem } from '../inventory-client/inventory-client.contract.js';
 import type {
-  InventoryItem,
-  InventoryReservation,
-} from '../inventory-client/inventory-client.service.js';
+  CartsRepository,
+  OrderTransitionInput,
+  OrdersRepository,
+  PaymentsRepository,
+} from './commerce.repository.port.js';
 
 @Injectable()
-export class CommerceRepository {
+export class CommerceRepository
+  implements CartsRepository, OrdersRepository, PaymentsRepository
+{
   constructor(@InjectDrizzle() private readonly database: Database) {}
 
   async createCart(sessionId?: string) {
@@ -37,10 +50,15 @@ export class CommerceRepository {
       .insert(carts)
       .values({
         customerId: null,
-        customerType: 'GUEST',
+        customerType: CustomerType.GUEST,
         sessionId: sessionId ?? null,
       })
       .returning();
+    if (!cart) {
+      throw new InternalServerErrorException(
+        'The cart could not be created.',
+      );
+    }
     return cart;
   }
 
@@ -73,6 +91,11 @@ export class CommerceRepository {
         },
       })
       .returning();
+    if (!item) {
+      throw new InternalServerErrorException(
+        'The cart item could not be persisted.',
+      );
+    }
     return item;
   }
 
@@ -91,31 +114,6 @@ export class CommerceRepository {
       .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cartId)))
       .returning({ id: cartItems.id });
     return deleted.length > 0;
-  }
-
-  async recordReservation(
-    orderId: string,
-    reservation: InventoryReservation,
-  ): Promise<void> {
-    await this.database.transaction(async (transaction) => {
-      await transaction.insert(orderInventoryReservations).values({
-        orderId,
-        reservationId: reservation.reservationId,
-        locationId: reservation.locationId,
-        status: InventoryReservationStatus.RESERVED,
-      });
-      await transaction
-        .update(orders)
-        .set({
-          inventoryReservationStatus: InventoryReservationStatus.RESERVED,
-          updatedAt: new Date(),
-        })
-        .where(eq(orders.id, orderId));
-      await transaction
-        .update(outboxEvents)
-        .set({ status: 'COMPLETED', processedAt: new Date() })
-        .where(eq(outboxEvents.aggregateId, orderId));
-    });
   }
 
   async getOrder(orderId: string) {
@@ -185,8 +183,10 @@ export class CommerceRepository {
 
   async updatePayment(
     paymentId: string,
+    expectedStatus: typeof payments.$inferSelect.status,
     status: typeof payments.$inferSelect.status,
     reference?: string,
+    verifiedBy?: string,
   ) {
     const [payment] = await this.database
       .update(payments)
@@ -194,9 +194,15 @@ export class CommerceRepository {
         status,
         reference: reference ?? undefined,
         paidAt: status === PaymentStatus.APPROVED ? new Date() : undefined,
+        verifiedBy: verifiedBy ?? undefined,
         updatedAt: new Date(),
       })
-      .where(eq(payments.id, paymentId))
+      .where(
+        and(
+          eq(payments.id, paymentId),
+          eq(payments.status, expectedStatus),
+        ),
+      )
       .returning();
     return payment ?? null;
   }
@@ -211,33 +217,67 @@ export class CommerceRepository {
     return reservation ?? null;
   }
 
-  async updateOrderState(
-    orderId: string,
-    status: typeof orders.$inferSelect.status,
-    inventoryReservationStatus?: typeof orders.$inferSelect.inventoryReservationStatus,
-    cancellationReason?: string,
-  ) {
+  async applyOrderTransition(input: OrderTransitionInput) {
     return this.database.transaction(async (transaction) => {
       const [order] = await transaction
         .update(orders)
         .set({
-          status,
-          ...(inventoryReservationStatus ? { inventoryReservationStatus } : {}),
-          ...(cancellationReason ? { cancellationReason } : {}),
+          status: input.status,
+          inventoryReservationStatus: input.inventoryReservationStatus,
+          ...(input.cancellationReason !== undefined
+            ? { cancellationReason: input.cancellationReason }
+            : {}),
           updatedAt: new Date(),
         })
-        .where(eq(orders.id, orderId))
+        .where(
+          and(
+            eq(orders.id, input.orderId),
+            eq(orders.status, input.expectedStatus),
+            eq(
+              orders.inventoryReservationStatus,
+              input.expectedReservationStatus,
+            ),
+          ),
+        )
         .returning();
       if (!order) {
-        throw new NotFoundException(`Order ${orderId} was not found.`);
+        throw new ConflictException(
+          `Order ${input.orderId} changed before the transition could be saved.`,
+        );
       }
-      if (status === OrderStatus.CANCELLED) {
+
+      if (input.reservationMutation) {
+        await this.applyReservationMutation(
+          transaction,
+          input.orderId,
+          input.reservationMutation,
+        );
+      }
+
+      if (input.newReservation) {
+        await transaction.insert(orderInventoryReservations).values({
+          orderId: input.orderId,
+          reservationId: input.newReservation.reservationId,
+          locationId: input.newReservation.locationId,
+          status: InventoryReservationStatus.RESERVED,
+        });
+      }
+
+      if (input.deliveryAttemptMutation) {
+        await this.applyDeliveryAttemptMutation(
+          transaction,
+          input.orderId,
+          input.deliveryAttemptMutation,
+        );
+      }
+
+      if (input.status === OrderStatus.CANCELLED) {
         await transaction
           .update(payments)
           .set({ status: PaymentStatus.CANCELLED, updatedAt: new Date() })
           .where(
             and(
-              eq(payments.orderId, orderId),
+              eq(payments.orderId, input.orderId),
               inArray(payments.status, [
                 PaymentStatus.PENDING,
                 PaymentStatus.UNDER_REVIEW,
@@ -249,14 +289,109 @@ export class CommerceRepository {
     });
   }
 
-  async updateReservationStatus(
-    reservationId: string,
-    status: typeof orderInventoryReservations.$inferSelect.status,
+  private async applyReservationMutation(
+    transaction: DatabaseTransaction,
+    orderId: string,
+    mutation: NonNullable<OrderTransitionInput['reservationMutation']>,
   ): Promise<void> {
-    await this.database
+    const [reservation] = await transaction
       .update(orderInventoryReservations)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(orderInventoryReservations.reservationId, reservationId));
+      .set({ status: mutation.status, updatedAt: new Date() })
+      .where(
+        and(
+          eq(orderInventoryReservations.orderId, orderId),
+          eq(orderInventoryReservations.reservationId, mutation.reservationId),
+          eq(orderInventoryReservations.status, mutation.expectedStatus),
+        ),
+      )
+      .returning({ id: orderInventoryReservations.id });
+    if (!reservation) {
+      throw new ConflictException(
+        `The inventory reservation for order ${orderId} changed before the transition could be saved.`,
+      );
+    }
+  }
+
+  private async applyDeliveryAttemptMutation(
+    transaction: DatabaseTransaction,
+    orderId: string,
+    mutation: NonNullable<OrderTransitionInput['deliveryAttemptMutation']>,
+  ): Promise<void> {
+    const [delivery] = await transaction
+      .select({ id: orderDeliveries.id })
+      .from(orderDeliveries)
+      .where(eq(orderDeliveries.orderId, orderId))
+      .limit(1);
+    if (!delivery) {
+      throw new NotFoundException(`Delivery for order ${orderId} was not found.`);
+    }
+
+    const [latestAttempt] = await transaction
+      .select()
+      .from(deliveryAttempts)
+      .where(eq(deliveryAttempts.deliveryId, delivery.id))
+      .orderBy(desc(deliveryAttempts.attemptNumber))
+      .limit(1);
+    if (mutation.kind === DeliveryAttemptMutationKind.START) {
+      await transaction.insert(deliveryAttempts).values({
+        deliveryId: delivery.id,
+        attemptNumber: (latestAttempt?.attemptNumber ?? 0) + 1,
+        status: DeliveryAttemptStatus.IN_TRANSIT,
+        startedAt: new Date(),
+        registeredBy: mutation.registeredBy,
+      });
+      return;
+    }
+
+    if (!latestAttempt) {
+      throw new NotFoundException(
+        `Delivery attempt for order ${orderId} was not found.`,
+      );
+    }
+
+    const expectedStatus =
+      mutation.kind === DeliveryAttemptMutationKind.RETURN
+        ? DeliveryAttemptStatus.FAILED
+        : DeliveryAttemptStatus.IN_TRANSIT;
+    if (latestAttempt.status !== expectedStatus) {
+      throw new ConflictException(
+        `The latest delivery attempt for order ${orderId} is not ${expectedStatus.toLowerCase()}.`,
+      );
+    }
+
+    const now = new Date();
+    const [updatedAttempt] = await transaction
+      .update(deliveryAttempts)
+      .set({
+        status:
+          mutation.kind === DeliveryAttemptMutationKind.FAIL
+            ? DeliveryAttemptStatus.FAILED
+            : mutation.kind === DeliveryAttemptMutationKind.RETURN
+              ? DeliveryAttemptStatus.RETURNED_TO_STORE
+              : DeliveryAttemptStatus.DELIVERED,
+        registeredBy: mutation.registeredBy,
+        ...(mutation.kind === DeliveryAttemptMutationKind.FAIL
+          ? { failureReason: mutation.reason, failedAt: now }
+          : {}),
+        ...(mutation.kind === DeliveryAttemptMutationKind.RETURN
+          ? { returnedAt: now }
+          : {}),
+        ...(mutation.kind === DeliveryAttemptMutationKind.COMPLETE
+          ? { deliveredAt: now }
+          : {}),
+      })
+      .where(
+        and(
+          eq(deliveryAttempts.id, latestAttempt.id),
+          eq(deliveryAttempts.status, expectedStatus),
+        ),
+      )
+      .returning({ id: deliveryAttempts.id });
+    if (!updatedAttempt) {
+      throw new ConflictException(
+        `The latest delivery attempt for order ${orderId} changed before the transition could be saved.`,
+      );
+    }
   }
 
   async getItemsForOrder(orderId: string): Promise<readonly InventoryItem[]> {
@@ -270,117 +405,6 @@ export class CommerceRepository {
     return items;
   }
 
-  async recordDeliveryFailure(orderId: string, reason: string): Promise<void> {
-    const [delivery] = await this.database
-      .select()
-      .from(orderDeliveries)
-      .where(eq(orderDeliveries.orderId, orderId))
-      .limit(1);
-    if (!delivery) {
-      throw new NotFoundException(
-        `Delivery for order ${orderId} was not found.`,
-      );
-    }
-
-    await this.database.transaction(async (transaction) => {
-      const [attempt] = await transaction
-        .select({ attemptNumber: deliveryAttempts.attemptNumber })
-        .from(deliveryAttempts)
-        .where(eq(deliveryAttempts.deliveryId, delivery.id))
-        .orderBy(desc(deliveryAttempts.attemptNumber))
-        .limit(1);
-      if (!attempt) {
-        throw new NotFoundException(
-          `Delivery attempt for order ${orderId} was not found.`,
-        );
-      }
-
-      const [updatedAttempt] = await transaction
-        .update(deliveryAttempts)
-        .set({
-          status: 'FAILED',
-          failureReason: reason,
-          failedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(deliveryAttempts.deliveryId, delivery.id),
-            eq(deliveryAttempts.attemptNumber, attempt.attemptNumber),
-            eq(deliveryAttempts.status, 'IN_TRANSIT'),
-          ),
-        )
-        .returning({ id: deliveryAttempts.id });
-      if (!updatedAttempt) {
-        throw new ConflictException(
-          `The latest delivery attempt for order ${orderId} is not in transit.`,
-        );
-      }
-    });
-  }
-
-  async recordDeliveryAttemptStart(orderId: string): Promise<void> {
-    const [delivery] = await this.database
-      .select()
-      .from(orderDeliveries)
-      .where(eq(orderDeliveries.orderId, orderId))
-      .limit(1);
-    if (!delivery) {
-      throw new NotFoundException(
-        `Delivery for order ${orderId} was not found.`,
-      );
-    }
-
-    await this.database.transaction(async (transaction) => {
-      const attempts = await transaction
-        .select({ attemptNumber: deliveryAttempts.attemptNumber })
-        .from(deliveryAttempts)
-        .where(eq(deliveryAttempts.deliveryId, delivery.id))
-        .orderBy(desc(deliveryAttempts.attemptNumber));
-      await transaction.insert(deliveryAttempts).values({
-        deliveryId: delivery.id,
-        attemptNumber: (attempts[0]?.attemptNumber ?? 0) + 1,
-        status: 'IN_TRANSIT',
-        startedAt: new Date(),
-      });
-    });
-  }
-
-  async updateLatestDeliveryAttempt(
-    orderId: string,
-    status: 'RETURNED_TO_STORE' | 'DELIVERED',
-  ): Promise<void> {
-    const [delivery] = await this.database
-      .select()
-      .from(orderDeliveries)
-      .where(eq(orderDeliveries.orderId, orderId))
-      .limit(1);
-    if (!delivery) {
-      throw new NotFoundException(
-        `Delivery for order ${orderId} was not found.`,
-      );
-    }
-
-    const [attempt] = await this.database
-      .select()
-      .from(deliveryAttempts)
-      .where(eq(deliveryAttempts.deliveryId, delivery.id))
-      .orderBy(desc(deliveryAttempts.attemptNumber))
-      .limit(1);
-    if (!attempt) {
-      throw new NotFoundException(
-        `Delivery attempt for order ${orderId} was not found.`,
-      );
-    }
-    await this.database
-      .update(deliveryAttempts)
-      .set({
-        status,
-        ...(status === 'RETURNED_TO_STORE'
-          ? { returnedAt: new Date() }
-          : { deliveredAt: new Date() }),
-      })
-      .where(eq(deliveryAttempts.id, attempt.id));
-  }
 
   async getLatestDeliveryAttempt(orderId: string) {
     const [delivery] = await this.database

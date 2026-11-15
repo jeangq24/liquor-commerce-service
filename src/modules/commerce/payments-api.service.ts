@@ -1,30 +1,43 @@
 import {
   ForbiddenException,
+  ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import type { CommerceActor } from '../../common/security/commerce-actor.js';
-import { CommerceRepository } from './commerce.repository.js';
+import {
+  PAYMENTS_REPOSITORY,
+  type PaymentsRepository,
+} from './commerce.repository.port.js';
+import { CommerceResponseMapper } from './commerce-response.mapper.js';
+import type { PaymentResponse } from './commerce-response.mapper.js';
 import { PaymentsService } from '../payments/payments.service.js';
+import { PaymentStatus } from '../payments/payment.constants.js';
 import type { PaymentStatus as PaymentStatusValue } from '../payments/payment.constants.js';
 import {
   PaymentAction,
   type PaymentAction as PaymentActionValue,
 } from './commerce-api.constants.js';
+import {
+  PAYMENT_ACTION_PERMISSION,
+} from './commerce-permissions.constants.js';
 
 @Injectable()
 export class PaymentsApiService {
   constructor(
-    private readonly repository: CommerceRepository,
+    @Inject(PAYMENTS_REPOSITORY)
+    private readonly repository: PaymentsRepository,
     private readonly paymentsService: PaymentsService,
+    private readonly mapper: CommerceResponseMapper,
   ) {}
 
-  async get(paymentId: string) {
+  async get(paymentId: string): Promise<PaymentResponse> {
     const payment = await this.repository.getPayment(paymentId);
     if (!payment) {
       throw new NotFoundException(`Payment ${paymentId} was not found.`);
     }
-    return { ...payment, amountCop: payment.amountCop.toString() };
+    return this.mapper.mapPayment(payment);
   }
 
   async transition(
@@ -32,13 +45,8 @@ export class PaymentsApiService {
     action: PaymentActionValue,
     actor: CommerceActor,
     reference?: string,
-  ) {
-    const requiredPermission = {
-      [PaymentAction.SUBMIT_TRANSFER]: 'commerce.payments.review',
-      [PaymentAction.APPROVE_TRANSFER]: 'commerce.payments.approve',
-      [PaymentAction.REJECT_TRANSFER]: 'commerce.payments.review',
-      [PaymentAction.RECORD_CASH]: 'commerce.payments.record_cash',
-    }[action];
+  ): Promise<PaymentResponse> {
+    const requiredPermission = PAYMENT_ACTION_PERMISSION[action];
     if (!actor.permissions.includes(requiredPermission)) {
       throw new ForbiddenException(
         `Actor is missing the required permission: ${requiredPermission}.`,
@@ -67,12 +75,19 @@ export class PaymentsApiService {
     }
     const updated = await this.repository.updatePayment(
       paymentId,
+      payment.status,
       next.status,
       reference,
+      next.status === PaymentStatus.APPROVED ||
+      next.status === PaymentStatus.REJECTED
+        ? actor.id
+        : undefined,
     );
     if (!updated) {
-      throw new NotFoundException(`Payment ${paymentId} was not found.`);
+      throw new ConflictException(
+        'Payment status changed while the action was being processed.',
+      );
     }
-    return { ...updated, amountCop: updated.amountCop.toString() };
+    return this.mapper.mapPayment(updated);
   }
 }

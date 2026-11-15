@@ -22,6 +22,11 @@ import {
   OrderStatus,
 } from '../../../modules/orders/order.constants.js';
 import {
+  CART_STATUSES,
+  CUSTOMER_TYPES,
+  DELIVERY_ATTEMPT_STATUSES,
+} from '../../../modules/commerce/commerce.constants.js';
+import {
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   PaymentStatus,
@@ -29,16 +34,12 @@ import {
 
 export const commerceSchema = pgSchema('commerce');
 
-export const customerTypeEnum = commerceSchema.enum('customer_type', [
-  'REGISTERED',
-  'GUEST',
-]);
+export const customerTypeEnum = commerceSchema.enum(
+  'customer_type',
+  CUSTOMER_TYPES,
+);
 
-export const cartStatusEnum = commerceSchema.enum('cart_status', [
-  'ACTIVE',
-  'CONVERTED',
-  'ABANDONED',
-]);
+export const cartStatusEnum = commerceSchema.enum('cart_status', CART_STATUSES);
 
 export const fulfillmentTypeEnum = commerceSchema.enum(
   'fulfillment_type',
@@ -67,7 +68,7 @@ export const paymentStatusEnum = commerceSchema.enum(
 
 export const deliveryAttemptStatusEnum = commerceSchema.enum(
   'delivery_attempt_status',
-  ['PENDING', 'IN_TRANSIT', 'FAILED', 'RETURNED_TO_STORE', 'DELIVERED'],
+  DELIVERY_ATTEMPT_STATUSES,
 );
 
 export const outboxEventStatusEnum = commerceSchema.enum(

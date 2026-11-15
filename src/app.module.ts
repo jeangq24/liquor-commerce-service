@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { isUUID } from 'class-validator';
+import { MAX_INVENTORY_TIMEOUT_MS } from './modules/inventory-client/inventory-client.constants.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { DatabaseModule } from './infrastructure/database/database.module.js';
@@ -65,10 +66,10 @@ import { CommerceModule } from './modules/commerce/commerce.module.js';
         if (
           !Number.isSafeInteger(inventoryTimeout) ||
           inventoryTimeout < 1 ||
-          inventoryTimeout > 60000
+          inventoryTimeout > MAX_INVENTORY_TIMEOUT_MS
         ) {
           throw new Error(
-            'INVENTORY_TIMEOUT_MS must be an integer between 1 and 60000.',
+            `INVENTORY_TIMEOUT_MS must be an integer between 1 and ${MAX_INVENTORY_TIMEOUT_MS}.`,
           );
         }
         const port = Number(configuration.PORT ?? 3001);

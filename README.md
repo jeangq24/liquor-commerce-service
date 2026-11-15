@@ -73,6 +73,7 @@ Available operations:
 | --- | --- | --- |
 | `POST` | `/carts` | Create a guest cart |
 | `GET` | `/carts/{cartId}` | Read a cart |
+| `GET` | `/carts/{cartId}/availability` | Check cart quantities against Inventory |
 | `POST` | `/carts/{cartId}/items` | Add or increase a variant quantity |
 | `PATCH` | `/carts/{cartId}/items/{itemId}` | Set a cart item quantity |
 | `DELETE` | `/carts/{cartId}/items/{itemId}` | Remove a cart item |

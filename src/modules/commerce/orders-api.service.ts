@@ -1,53 +1,68 @@
 import {
   BadRequestException,
   BadGatewayException,
+  Inject,
   ForbiddenException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import type { CommerceActor } from '../../common/security/commerce-actor.js';
-import { CommerceRepository } from './commerce.repository.js';
+import {
+  INVENTORY_CLIENT,
+  type InventoryClient,
+  type InventoryReservation,
+  type StockReturnItem,
+} from '../inventory-client/inventory-client.contract.js';
 import { OrdersService } from '../orders/orders.service.js';
 import {
   InventoryReservationStatus,
   type OrderStatus as OrderStatusValue,
 } from '../orders/order.constants.js';
-import {
-  InventoryClientService,
-  type InventoryReservation,
-  type StockReturnItem,
-} from '../inventory-client/inventory-client.service.js';
+import { InventoryPermission } from '../inventory-client/inventory-client.constants.js';
+import { PaymentStatus } from '../payments/payment.constants.js';
 import {
   OrderAction,
   type OrderAction as OrderActionValue,
 } from './commerce-api.constants.js';
+import { CommercePermission } from './commerce-permissions.constants.js';
+import {
+  ORDERS_REPOSITORY,
+  type OrdersRepository,
+  type OrderTransitionInput,
+} from './commerce.repository.port.js';
+import { DeliveryAttemptMutationKind } from './commerce.constants.js';
+import { CommerceResponseMapper } from './commerce-response.mapper.js';
+import type {
+  OrderDetailsResponse,
+  OrderSummaryResponse,
+} from './commerce-response.mapper.js';
 
 @Injectable()
 export class OrdersApiService {
   constructor(
-    private readonly repository: CommerceRepository,
+    @Inject(ORDERS_REPOSITORY)
+    private readonly repository: OrdersRepository,
     private readonly ordersService: OrdersService,
-    private readonly inventory: InventoryClientService,
+    @Inject(INVENTORY_CLIENT)
+    private readonly inventory: InventoryClient,
+    private readonly mapper: CommerceResponseMapper,
   ) {}
 
-  async list(status?: OrderStatusValue, limit = 25) {
+  async list(
+    status?: OrderStatusValue,
+    limit = 25,
+  ): Promise<readonly OrderSummaryResponse[]> {
     const results = await this.repository.listOrders(status, limit);
-    return results.map((order) => ({
-      ...order,
-      subtotalCop: order.subtotalCop.toString(),
-      discountCop: order.discountCop.toString(),
-      deliveryFeeCop: order.deliveryFeeCop.toString(),
-      totalCop: order.totalCop.toString(),
-    }));
+    return results.map((order) => this.mapper.mapOrderSummary(order));
   }
 
-  async get(orderId: string) {
+  async get(orderId: string): Promise<OrderDetailsResponse> {
     const order = await this.repository.getOrder(orderId);
     if (!order) {
       throw new NotFoundException(`Order ${orderId} was not found.`);
     }
-    return this.serializeOrder(order);
+    return this.mapper.mapOrder(order);
   }
 
   async transition(
@@ -56,12 +71,12 @@ export class OrdersApiService {
     actor: CommerceActor,
     reason?: string,
     returnItems?: readonly StockReturnItem[],
-  ) {
+  ): Promise<OrderDetailsResponse> {
     if (action === OrderAction.CANCEL) {
-      this.requirePermission(actor, 'commerce.orders.cancel');
+      this.requirePermission(actor, CommercePermission.ORDERS_CANCEL);
     }
     if (action === OrderAction.RETURN_TO_STORE) {
-      this.requirePermission(actor, 'inventory.stock.return');
+      this.requirePermission(actor, InventoryPermission.STOCK_RETURN);
     }
 
     const order = await this.repository.getOrder(orderId);
@@ -79,7 +94,13 @@ export class OrdersApiService {
     };
     const paymentState = { method: payment.method, status: payment.status };
     let next = state;
-    if (action === OrderAction.CANCEL && payment.status === 'APPROVED') {
+    let reservationMutation: OrderTransitionInput['reservationMutation'];
+    let newReservation: OrderTransitionInput['newReservation'];
+    let deliveryAttemptMutation: OrderTransitionInput['deliveryAttemptMutation'];
+    if (
+      action === OrderAction.CANCEL &&
+      payment.status === PaymentStatus.APPROVED
+    ) {
       throw new ConflictException(
         'Cancellation after payment approval is disabled until the refund policy is defined.',
       );
@@ -109,7 +130,10 @@ export class OrdersApiService {
             actor,
           );
           this.assertReservationMatches(reservation, dispatched);
-          await this.repository.recordDeliveryAttemptStart(orderId);
+          deliveryAttemptMutation = {
+            kind: DeliveryAttemptMutationKind.START,
+            registeredBy: actor.id,
+          };
         } else {
           next = this.ordersService.confirmPickup(state, paymentState, true);
           const dispatched = await this.inventory.dispatch(
@@ -119,22 +143,30 @@ export class OrdersApiService {
           );
           this.assertReservationMatches(reservation, dispatched);
         }
-        await this.repository.updateReservationStatus(
-          reservation.reservationId,
-          InventoryReservationStatus.DISPATCHED,
-        );
+        reservationMutation = {
+          reservationId: reservation.reservationId,
+          expectedStatus: InventoryReservationStatus.RESERVED,
+          status: InventoryReservationStatus.DISPATCHED,
+        };
         break;
       }
       case OrderAction.DELIVER:
         next = this.ordersService.markDelivered(state);
-        await this.repository.updateLatestDeliveryAttempt(orderId, 'DELIVERED');
+        deliveryAttemptMutation = {
+          kind: DeliveryAttemptMutationKind.COMPLETE,
+          registeredBy: actor.id,
+        };
         break;
       case OrderAction.DELIVERY_FAILED:
         if (!reason?.trim()) {
           throw new ConflictException('A delivery failure reason is required.');
         }
         next = this.ordersService.markDeliveryFailed(state);
-        await this.repository.recordDeliveryFailure(orderId, reason);
+        deliveryAttemptMutation = {
+          kind: DeliveryAttemptMutationKind.FAIL,
+          reason: reason.trim(),
+          registeredBy: actor.id,
+        };
         break;
       case OrderAction.RETURN_TO_STORE: {
         const reservation =
@@ -163,14 +195,15 @@ export class OrdersApiService {
           },
           actor,
         );
-        await this.repository.updateReservationStatus(
-          reservation.reservationId,
-          InventoryReservationStatus.RELEASED,
-        );
-        await this.repository.updateLatestDeliveryAttempt(
-          orderId,
-          'RETURNED_TO_STORE',
-        );
+        reservationMutation = {
+          reservationId: reservation.reservationId,
+          expectedStatus: InventoryReservationStatus.DISPATCHED,
+          status: InventoryReservationStatus.RELEASED,
+        };
+        deliveryAttemptMutation = {
+          kind: DeliveryAttemptMutationKind.RETURN,
+          registeredBy: actor.id,
+        };
         next = {
           ...next,
           inventoryReservationStatus: InventoryReservationStatus.RELEASED,
@@ -199,7 +232,7 @@ export class OrdersApiService {
           items,
           actor,
         );
-        await this.repository.recordReservation(orderId, reservation);
+        newReservation = reservation;
         break;
       }
       case OrderAction.CANCEL:
@@ -223,20 +256,28 @@ export class OrdersApiService {
             actor,
           );
           this.assertReservationMatches(reservation, released);
-          await this.repository.updateReservationStatus(
-            reservation.reservationId,
-            InventoryReservationStatus.RELEASED,
-          );
+          reservationMutation = {
+            reservationId: reservation.reservationId,
+            expectedStatus: InventoryReservationStatus.RESERVED,
+            status: InventoryReservationStatus.RELEASED,
+          };
         }
         break;
     }
 
-    await this.repository.updateOrderState(
+    await this.repository.applyOrderTransition({
       orderId,
-      next.status,
-      next.inventoryReservationStatus,
-      action === OrderAction.CANCEL ? reason : undefined,
-    );
+      expectedStatus: state.status,
+      expectedReservationStatus: state.inventoryReservationStatus,
+      status: next.status,
+      inventoryReservationStatus: next.inventoryReservationStatus,
+      ...(action === OrderAction.CANCEL
+        ? { cancellationReason: reason?.trim() }
+        : {}),
+      ...(reservationMutation ? { reservationMutation } : {}),
+      ...(newReservation ? { newReservation } : {}),
+      ...(deliveryAttemptMutation ? { deliveryAttemptMutation } : {}),
+    });
     return this.get(orderId);
   }
 
@@ -286,25 +327,4 @@ export class OrdersApiService {
     }
   }
 
-  private serializeOrder(
-    order: NonNullable<Awaited<ReturnType<CommerceRepository['getOrder']>>>,
-  ) {
-    return {
-      ...order,
-      subtotalCop: order.subtotalCop.toString(),
-      discountCop: order.discountCop.toString(),
-      deliveryFeeCop: order.deliveryFeeCop.toString(),
-      totalCop: order.totalCop.toString(),
-      items: order.items.map((item) => ({
-        ...item,
-        unitPriceCop: item.unitPriceCop.toString(),
-        discountAmountCop: item.discountAmountCop.toString(),
-        lineTotalCop: item.lineTotalCop.toString(),
-      })),
-      payments: order.payments.map((payment) => ({
-        ...payment,
-        amountCop: payment.amountCop.toString(),
-      })),
-    };
-  }
 }

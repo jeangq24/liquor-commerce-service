@@ -1,5 +1,11 @@
-import { ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  BadGatewayException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { InventoryHttpTransport } from './inventory-client.contract.js';
+import { INVENTORY_AVAILABILITY_BATCH_SIZE } from './inventory-client.constants.js';
 import { InventoryClientService } from './inventory-client.service.js';
 
 describe('InventoryClientService', () => {
@@ -8,11 +14,12 @@ describe('InventoryClientService', () => {
   const locationId = '00000000-0000-4000-8000-000000000001';
   const actorId = '00000000-0000-4000-8000-000000000004';
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+  let transport: InventoryHttpTransport;
   let service: InventoryClientService;
 
   beforeEach(() => {
     fetchMock = vi.fn<typeof fetch>();
-    vi.stubGlobal('fetch', fetchMock);
+    transport = { fetch: fetchMock };
     service = new InventoryClientService(
       new ConfigService({
         INVENTORY_API_URL: 'http://inventory.local/',
@@ -20,17 +27,114 @@ describe('InventoryClientService', () => {
         INVENTORY_LOCATION_ID: locationId,
         INVENTORY_TIMEOUT_MS: '1000',
       }),
+      transport,
     );
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  it('queries availability with Inventory location and read permission', async () => {
+    const secondVariantId = '00000000-0000-4000-8000-000000000005';
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: null,
+            locationId,
+            variantId: reservationId,
+            quantityOnHand: 4,
+            quantityReserved: 1,
+            quantityAvailable: 3,
+            updatedAt: null,
+          },
+          {
+            id: null,
+            locationId,
+            variantId: secondVariantId,
+            quantityOnHand: 0,
+            quantityReserved: 0,
+            quantityAvailable: 0,
+            updatedAt: null,
+          },
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    await expect(
+      service.getAvailability([reservationId, secondVariantId]),
+    ).resolves.toEqual([
+      { variantId: reservationId, quantityAvailable: 3 },
+      { variantId: secondVariantId, quantityAvailable: 0 },
+    ]);
+
+    const [url, options] = fetchMock.mock.calls[0]!;
+    if (!(url instanceof URL)) {
+      throw new Error('Inventory availability request URL must be a URL.');
+    }
+    expect(url.pathname).toBe('/internal/v1/stock/availability');
+    expect(url.searchParams.get('locationId')).toBe(locationId);
+    expect(url.searchParams.getAll('variantIds')).toEqual([
+      reservationId,
+      secondVariantId,
+    ]);
+    const headers = new Headers(options?.headers);
+    expect(headers.get('x-actor-permissions')).toBe('inventory.stock.read');
+  });
+
+  it('rejects incomplete availability responses instead of assuming zero stock', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await expect(
+      service.getAvailability([reservationId]),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('splits availability queries to respect the 100-variant limit', async () => {
+    const variantIds = Array.from(
+      { length: INVENTORY_AVAILABILITY_BATCH_SIZE + 1 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    );
+    fetchMock.mockImplementation(async (input) => {
+      if (!(input instanceof URL)) {
+        throw new Error('Inventory availability request URL must be a URL.');
+      }
+      return new Response(
+        JSON.stringify(
+          input.searchParams.getAll('variantIds').map((variantId) => ({
+            id: null,
+            locationId,
+            variantId,
+            quantityAvailable: 1,
+          })),
+        ),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+
+    const availability = await service.getAvailability(variantIds);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(availability).toHaveLength(INVENTORY_AVAILABILITY_BATCH_SIZE + 1);
+    expect(availability[INVENTORY_AVAILABILITY_BATCH_SIZE]).toEqual({
+      variantId: variantIds[INVENTORY_AVAILABILITY_BATCH_SIZE],
+      quantityAvailable: 1,
+    });
   });
 
   it('reserves stock through Inventory using its internal contract', async () => {
     fetchMock.mockResolvedValue(
       new Response(
-        JSON.stringify({ reservationId, locationId, status: 'ACTIVE' }),
+        JSON.stringify({
+          reservationId,
+          orderId,
+          locationId,
+          status: 'ACTIVE',
+        }),
         { status: 201, headers: { 'content-type': 'application/json' } },
       ),
     );
@@ -58,6 +162,15 @@ describe('InventoryClientService', () => {
     );
   });
 
+  it('rejects invalid idempotency keys before contacting Inventory', async () => {
+    await expect(
+      service.reserve(orderId, ' ', [
+        { variantId: reservationId, quantity: 1 },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses the caller actor and maps Inventory permission failures to 403', async () => {
     fetchMock.mockResolvedValue(new Response('forbidden', { status: 403 }));
 
@@ -76,10 +189,24 @@ describe('InventoryClientService', () => {
 
   it('sends only verified return quantities to Inventory', async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ returnId: reservationId }), {
-        status: 201,
-        headers: { 'content-type': 'application/json' },
-      }),
+      new Response(
+        JSON.stringify({
+          returnId: reservationId,
+          orderId,
+          locationId,
+          deliveryAttemptId: actorId,
+          status: 'PROCESSED',
+          items: [
+            {
+              variantId: reservationId,
+              quantityReceived: 2,
+              quantityRestockable: 1,
+              reason: null,
+            },
+          ],
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
     );
 
     await service.registerReturn(

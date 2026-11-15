@@ -30,6 +30,7 @@ import { CommercePermissionGuard } from '../../common/guards/commerce-permission
 import { CurrentActor } from '../../common/security/commerce-actor.decorator.js';
 import type { CommerceActor } from '../../common/security/commerce-actor.js';
 import { RequirePermissions } from '../../common/security/require-permissions.decorator.js';
+import { CommercePermission } from './commerce-permissions.constants.js';
 import { CartsService } from './carts.service.js';
 import { CheckoutService } from './checkout.service.js';
 import { OrdersApiService } from './orders-api.service.js';
@@ -65,6 +66,15 @@ export class CartsController {
   @ApiOkResponse()
   get(@Param() params: CartIdParamsDto) {
     return this.cartsService.get(params.cartId);
+  }
+
+  @Get(':cartId/availability')
+  @ApiOperation({
+    summary: 'Check the cart quantities against Inventory availability',
+  })
+  @ApiOkResponse()
+  getAvailability(@Param() params: CartIdParamsDto) {
+    return this.cartsService.getAvailability(params.cartId);
   }
 
   @Post(':cartId/items')
@@ -144,7 +154,7 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersApiService) {}
 
   @Get()
-  @RequirePermissions('commerce.orders.read')
+  @RequirePermissions(CommercePermission.ORDERS_READ)
   @ApiOperation({ summary: 'List recent orders' })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -154,7 +164,7 @@ export class OrdersController {
   }
 
   @Get(':orderId')
-  @RequirePermissions('commerce.orders.read')
+  @RequirePermissions(CommercePermission.ORDERS_READ)
   @ApiOperation({ summary: 'Get an order with items, payment and delivery' })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -164,7 +174,7 @@ export class OrdersController {
   }
 
   @Post(':orderId/actions')
-  @RequirePermissions('commerce.orders.update_status')
+  @RequirePermissions(CommercePermission.ORDERS_UPDATE_STATUS)
   @ApiOperation({ summary: 'Execute a validated order lifecycle action' })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -202,7 +212,7 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsApiService) {}
 
   @Get(':paymentId')
-  @RequirePermissions('commerce.payments.read')
+  @RequirePermissions(CommercePermission.PAYMENTS_READ)
   @ApiOperation({ summary: 'Get payment status and reference' })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()

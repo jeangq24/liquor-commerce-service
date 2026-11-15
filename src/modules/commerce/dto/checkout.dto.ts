@@ -25,67 +25,67 @@ export class DeliveryDetailsDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
-  municipality!: string;
+  readonly municipality!: string;
 
   @ApiProperty({ maxLength: 120 })
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
-  neighborhood!: string;
+  readonly neighborhood!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
-  address!: string;
+  readonly address!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  addressReference?: string;
+  readonly addressReference?: string;
 
   @ApiPropertyOptional({ maxLength: 180 })
   @IsOptional()
   @IsString()
   @MaxLength(180)
-  recipientName?: string;
+  readonly recipientName?: string;
 
   @ApiPropertyOptional({ maxLength: 30 })
   @IsOptional()
   @IsString()
   @MaxLength(30)
-  recipientPhone?: string;
+  readonly recipientPhone?: string;
 }
 
 export class CheckoutDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  cartId!: string;
+  readonly cartId!: string;
 
   @ApiProperty({ maxLength: 180 })
   @IsString()
   @IsNotEmpty()
   @MaxLength(180)
-  customerName!: string;
+  readonly customerName!: string;
 
   @ApiProperty({ maxLength: 30 })
   @IsString()
   @IsNotEmpty()
   @MaxLength(30)
-  customerPhone!: string;
+  readonly customerPhone!: string;
 
   @ApiPropertyOptional({ maxLength: 180 })
   @IsOptional()
   @IsEmail()
   @MaxLength(180)
-  customerEmail?: string;
+  readonly customerEmail?: string;
 
   @ApiProperty({ enum: Object.values(FulfillmentType) })
   @IsEnum(FulfillmentType)
-  fulfillmentType!: (typeof FulfillmentType)[keyof typeof FulfillmentType];
+  readonly fulfillmentType!: (typeof FulfillmentType)[keyof typeof FulfillmentType];
 
   @ApiProperty({ enum: Object.values(PaymentMethod) })
   @IsEnum(PaymentMethod)
-  paymentMethod!: (typeof PaymentMethod)[keyof typeof PaymentMethod];
+  readonly paymentMethod!: (typeof PaymentMethod)[keyof typeof PaymentMethod];
 
   @ApiPropertyOptional({ type: DeliveryDetailsDto })
   @ValidateIf(
@@ -94,20 +94,20 @@ export class CheckoutDto {
   )
   @ValidateNested()
   @Type(() => DeliveryDetailsDto)
-  delivery?: DeliveryDetailsDto;
+  readonly delivery?: DeliveryDetailsDto;
 }
 
 export class OrderIdParamsDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  orderId!: string;
+  readonly orderId!: string;
 }
 
 export class OrderListQueryDto {
   @ApiPropertyOptional({ enum: Object.values(OrderStatus) })
   @IsOptional()
   @IsEnum(OrderStatus)
-  status?: (typeof OrderStatus)[keyof typeof OrderStatus];
+  readonly status?: (typeof OrderStatus)[keyof typeof OrderStatus];
 
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 25 })
   @IsOptional()
@@ -115,13 +115,13 @@ export class OrderListQueryDto {
   @IsInt()
   @Min(1)
   @Max(100)
-  limit = 25;
+  readonly limit = 25;
 }
 
 export class OrderActionDto {
   @ApiProperty({ enum: Object.values(OrderAction) })
   @IsEnum(OrderAction)
-  action!: (typeof OrderAction)[keyof typeof OrderAction];
+  readonly action!: (typeof OrderAction)[keyof typeof OrderAction];
 
   @ApiPropertyOptional({ maxLength: 180 })
   @ValidateIf(
@@ -131,8 +131,9 @@ export class OrderActionDto {
       request.action === OrderAction.RETURN_TO_STORE,
   )
   @IsString()
+  @IsNotEmpty()
   @MaxLength(180)
-  reason?: string;
+  readonly reason?: string;
 
   @ApiPropertyOptional({ type: () => [StockReturnItemDto] })
   @ValidateIf(
@@ -143,45 +144,45 @@ export class OrderActionDto {
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => StockReturnItemDto)
-  items?: StockReturnItemDto[];
+  readonly items?: StockReturnItemDto[];
 }
 
 export class StockReturnItemDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  variantId!: string;
+  readonly variantId!: string;
 
   @ApiProperty({ minimum: 1 })
   @IsInt()
   @Min(1)
-  quantityReceived!: number;
+  readonly quantityReceived!: number;
 
   @ApiProperty({ minimum: 0 })
   @IsInt()
   @Min(0)
-  quantityRestockable!: number;
+  readonly quantityRestockable!: number;
 
   @ApiPropertyOptional({ maxLength: 180 })
   @IsOptional()
   @IsString()
   @MaxLength(180)
-  reason?: string;
+  readonly reason?: string;
 }
 
 export class PaymentIdParamsDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
-  paymentId!: string;
+  readonly paymentId!: string;
 }
 
 export class PaymentActionDto {
   @ApiProperty({ enum: Object.values(PaymentAction) })
   @IsEnum(PaymentAction)
-  action!: (typeof PaymentAction)[keyof typeof PaymentAction];
+  readonly action!: (typeof PaymentAction)[keyof typeof PaymentAction];
 
   @ApiPropertyOptional({ maxLength: 180 })
   @IsOptional()
   @IsString()
   @MaxLength(180)
-  reference?: string;
+  readonly reference?: string;
 }
