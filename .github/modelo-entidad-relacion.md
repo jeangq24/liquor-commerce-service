@@ -10,7 +10,7 @@ Existencias y trazabilidad
 inventory_locations · stock_balances · stock_movements
 commerce — Commerce Service
 Compras y transacciones comerciales
-carts · cart_items · orders · order_items · payments · order_deliveries
+carts · cart_items · orders · order_inventory_reservations · order_items · payments · order_deliveries
 app — Datos de aplicación
 Perfiles y autorización
 profiles · roles · user_roles
@@ -621,6 +621,7 @@ Relación	Cardinalidad
 orders → order_items	1
 orders → payments	1
 orders → order_deliveries	0:1
+orders → order_inventory_reservations	1:N
 inventory_locations → stock_balances	1
 inventory_locations → stock_movements	1
 profiles → user_roles	1
@@ -1229,6 +1230,7 @@ El procesamiento debe ser idempotente y admitir reintentos controlados.
 6.4 commerce
     • carts 1 cart_items
     • orders 1 order_items
+    • orders 1 order_inventory_reservations
     • orders 1 payments
     • orders 1:1 order_deliveries para pedidos de entrega
     • order_deliveries 1 delivery_attempts
@@ -1241,6 +1243,8 @@ Las referencias entre servicios son referencias lógicas mediante UUID.
 Ejemplos:
     • inventory.stock_balances.variant_id → catalog.product_variants.id
     • inventory.stock_reservations.order_id → commerce.orders.id
+    • commerce.order_inventory_reservations.reservation_id → inventory.stock_reservations.id
+    • commerce.order_inventory_reservations.location_id → inventory.inventory_locations.id
     • commerce.orders.customer_id → app.profiles.id
     • inventory.stock_movements.performed_by → app.profiles.id
 No se crean claves foráneas físicas entre esquemas propiedad de servicios diferentes.

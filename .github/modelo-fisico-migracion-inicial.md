@@ -10,15 +10,16 @@ Estado: Especificación para implementación
 
 1. Alcance
 Este documento define la persistencia inicial del servicio liquor-commerce-service, responsable de gestionar el ciclo comercial de Licorera Online.
-El servicio administra el esquema PostgreSQL commerce y sus ocho entidades:
+El servicio administra el esquema PostgreSQL commerce y sus nueve entidades:
     1. carts
     2. cart_items
     3. orders
-    4. order_items
-    5. payments
-    6. order_deliveries
-    7. delivery_attempts
-    8. outbox_events
+    4. order_inventory_reservations
+    5. order_items
+    6. payments
+    7. order_deliveries
+    8. delivery_attempts
+    9. outbox_events
 Se incluyen:
     • Tipos ENUM.
     • Definición física de las tablas.
@@ -136,9 +137,11 @@ CREATE TYPE commerce.outbox_event_status AS ENUM (
 );
 
 4. Migración SQL inicial
-Archivo sugerido:
-drizzle/0001_create_commerce_schema.sql
+Archivos versionados:
+drizzle/0000_create_commerce_schema.sql
+drizzle/0001_add_inventory_reservation_history.sql
 La migración crea exclusivamente el esquema commerce. No debe modificar tablas pertenecientes a app, catalog o inventory.
+Las instrucciones de creación son idempotentes frente a objetos equivalentes ya existentes. No reparan objetos con columnas, tipos o restricciones incompatibles; esos cambios requieren migraciones explícitas.
 4.1 Creación del esquema y ENUM
 CREATE SCHEMA IF NOT EXISTS commerce;
 
@@ -603,12 +606,45 @@ Reglas:
     • processed_at registra la finalización.
 El Outbox no reemplaza las entidades de pedidos ni de pagos.
 
+4.10 Order inventory reservations
+Conserva la relación entre cada pedido y las reservas creadas por Inventory, incluidos sus reintentos. Cada fila representa una reserva confirmada; el estado de orders.inventory_reservation_status sigue representando la coordinación más reciente del pedido.
+CREATE TABLE commerce.order_inventory_reservations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  order_id UUID NOT NULL,
+
+  -- Referencias lógicas a inventory.stock_reservations.id e inventory.inventory_locations.id.
+  reservation_id UUID NOT NULL UNIQUE,
+  location_id UUID NOT NULL,
+
+  status commerce.inventory_reservation_status
+    NOT NULL DEFAULT 'RESERVED',
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT fk_order_inventory_reservations_order
+    FOREIGN KEY (order_id)
+    REFERENCES commerce.orders(id)
+);
+
+CREATE INDEX idx_order_inventory_reservations_order
+  ON commerce.order_inventory_reservations(order_id);
+
+CREATE INDEX idx_order_inventory_reservations_location
+  ON commerce.order_inventory_reservations(location_id);
+
+CREATE INDEX idx_order_inventory_reservations_status
+  ON commerce.order_inventory_reservations(status);
+reservation_id y location_id no tienen claves foráneas físicas porque pertenecen a Inventory. La relación única de reservation_id evita asociar la misma reserva a más de un registro de Commerce.
+
 5. Relaciones del modelo
 Tabla origen	Tabla destino	Relación
 carts	cart_items	1
 orders	order_items	1
 orders	payments	1
 orders	order_deliveries	1:0..1
+orders	order_inventory_reservations	1:N
 order_deliveries	delivery_attempts	1
 Las relaciones con app, catalog e inventory se manejan mediante identificadores UUID lógicos.
 5.1 Consideraciones sobre integridad
@@ -829,13 +865,14 @@ src/
             └── index.ts
 
 drizzle/
-├── 0001_create_commerce_schema.sql
+├── 0000_create_commerce_schema.sql
+├── 0001_add_inventory_reservation_history.sql
 └── meta/
 9.2 Configuración drizzle.config.ts
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-  schema: './src/infrastructure/database/schema/**/*.ts',
+  schema: './src/infrastructure/database/schema/commerce.schema.ts',
   out: './drizzle',
   dialect: 'postgresql',
   dbCredentials: {
@@ -952,13 +989,14 @@ export const outboxEventStatusEnum =
       'FAILED',
     ],
   );
-A continuación se deben declarar las ocho tablas:
+A continuación se deben declarar las nueve tablas:
 carts
 cartItems
 orders
 orderItems
 payments
 orderDeliveries
+orderInventoryReservations
 deliveryAttempts
 outboxEvents
 Cada definición debe reproducir las columnas, nombres SQL, tipos, valores por defecto, índices y restricciones de la migración inicial.
@@ -1060,7 +1098,7 @@ Proveedor de despliegue	Pendiente
 La persistencia inicial de Commerce se considera implementada cuando:
     • El esquema commerce puede crearse independientemente.
     • Todos los ENUM están definidos.
-    • Las ocho tablas están creadas.
+    • Las nueve tablas están creadas.
     • Todas las tablas tienen PK.
     • Las relaciones internas tienen FK.
     • Las referencias a otros servicios son UUID lógicos.
