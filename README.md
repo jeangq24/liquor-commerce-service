@@ -23,7 +23,7 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+REST API for the LicoresYaaa Commerce service, built with NestJS, PostgreSQL and Drizzle ORM.
 
 ## Project setup
 
@@ -47,6 +47,67 @@ pnpm db:migrate
 ```
 
 The application requires a valid PostgreSQL `DATABASE_URL` at startup.
+
+## Commerce API
+
+Copy `.env.example` to `.env` and configure the PostgreSQL and Inventory service
+settings before starting the API:
+
+```powershell
+Copy-Item .env.example .env
+pnpm db:migrate
+pnpm start:dev
+```
+
+`INVENTORY_API_URL`, `INVENTORY_SERVICE_TOKEN` and `INVENTORY_LOCATION_ID` must
+point to the real Inventory service and configured location. The service token
+must match Inventory's `INTERNAL_API_TOKEN`. `COMMERCE_INTERNAL_API_TOKEN` is a
+separate shared credential for the trusted BFF. Both tokens must contain at
+least 32 characters. `HOST` defaults to `0.0.0.0`; OpenAPI is available at
+`http://localhost:3001/docs`, and the API base path is
+`http://localhost:3001/api/commerce`.
+
+Available operations:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/carts` | Create a guest cart |
+| `GET` | `/carts/{cartId}` | Read a cart |
+| `GET` | `/carts/{cartId}/availability` | Check cart quantities against Inventory |
+| `POST` | `/carts/{cartId}/items` | Add or increase a variant quantity |
+| `PATCH` | `/carts/{cartId}/items/{itemId}` | Set a cart item quantity |
+| `DELETE` | `/carts/{cartId}/items/{itemId}` | Remove a cart item |
+| `POST` | `/checkout` | Returns `503` until Catalog publishes its authoritative variant and price API |
+| `GET` | `/orders` | List recent orders; supports `status` and `limit`; requires `commerce.orders.read` |
+| `GET` | `/orders/{orderId}` | Read order, items, payment, delivery and reservation history; requires `commerce.orders.read` |
+| `POST` | `/orders/{orderId}/actions` | Execute a validated order lifecycle action; requires `commerce.orders.update_status` |
+| `GET` | `/payments/{paymentId}` | Read payment state; requires `commerce.payments.read` |
+| `POST` | `/payments/{paymentId}/actions` | Execute an authorized payment action |
+
+Order and payment endpoints require `Authorization: Bearer <COMMERCE_INTERNAL_API_TOKEN>`,
+`x-actor-id` and comma-separated `x-actor-permissions` headers. These headers
+must be injected only by a trusted BFF after it verifies the user's Supabase JWT
+and resolves permissions. Do not expose this internal contract directly to a
+browser or accept actor context from public requests. The Commerce API checks
+permissions for each operation and propagates the corresponding Inventory
+permission with the actor ID to Inventory.
+
+Checkout is deliberately unavailable: Commerce must not accept client-supplied
+prices, and Catalog does not yet expose the authoritative API contract required
+to create order snapshots. Cart operations currently persist variant IDs and
+quantities without validating them against Catalog. Monetary amounts are
+returned as decimal strings to preserve integer COP precision.
+
+Order actions: `CONFIRM`, `START_PREPARATION`, `MARK_READY`, `DISPATCH`,
+`PICKUP`, `DELIVER`, `DELIVERY_FAILED`, `RETURN_TO_STORE`, `RETRY_DELIVERY`,
+`CANCEL`. `DELIVERY_FAILED`, `RETURN_TO_STORE` and `CANCEL` require a `reason`.
+`RETURN_TO_STORE` also requires `items`, with `variantId`, `quantityReceived`
+and `quantityRestockable`; quantities are checked against the order before
+Commerce invokes Inventory's return endpoint.
+Payment actions: `SUBMIT_TRANSFER`, `APPROVE_TRANSFER`, `REJECT_TRANSFER`,
+`RECORD_CASH`. Payment actions require `commerce.payments.review`,
+`commerce.payments.approve` or `commerce.payments.record_cash` according to
+the requested action.
 
 ## Compile and run the project
 

@@ -16,5 +16,6 @@ import { schema } from './schema/index.js';
       }),
     }),
   ],
+  exports: [DrizzleModule],
 })
 export class DatabaseModule {}
