@@ -31,6 +31,23 @@
 $ pnpm install
 ```
 
+## Database setup
+
+Create a local environment file from the example and set `DATABASE_URL` to your PostgreSQL connection string:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Drizzle Kit reads schema definitions from `src/infrastructure/database/schema/` and writes migrations to `drizzle/`. After adding or changing schema definitions, generate and apply migrations with:
+
+```bash
+pnpm db:generate
+pnpm db:migrate
+```
+
+The application requires a valid PostgreSQL `DATABASE_URL` at startup.
+
 ## Compile and run the project
 
 ```bash
