@@ -50,7 +50,7 @@ The application requires a valid PostgreSQL `DATABASE_URL` at startup.
 
 ## Commerce API
 
-Copy `.env.example` to `.env` and configure the PostgreSQL and Inventory service
+Copy `.env.example` to `.env` and configure the PostgreSQL, Catalog and Inventory service
 settings before starting the API:
 
 ```powershell
@@ -62,8 +62,10 @@ pnpm start:dev
 `INVENTORY_API_URL`, `INVENTORY_SERVICE_TOKEN` and `INVENTORY_LOCATION_ID` must
 point to the real Inventory service and configured location. The service token
 must match Inventory's `INTERNAL_API_TOKEN`. `COMMERCE_INTERNAL_API_TOKEN` is a
-separate shared credential for the trusted BFF. Both tokens must contain at
-least 32 characters. `HOST` defaults to `0.0.0.0`; OpenAPI is available at
+separate shared credential for the trusted BFF. `CATALOG_API_URL` points to
+Catalog and `CATALOG_SERVICE_TOKEN` must match Catalog's
+`CATALOG_SERVICE_API_TOKEN`. All three tokens must contain at least 32
+characters. `HOST` defaults to `0.0.0.0`; OpenAPI is available at
 `http://localhost:3001/docs`, and the API base path is
 `http://localhost:3001/api/commerce`.
 
@@ -77,7 +79,7 @@ Available operations:
 | `POST` | `/carts/{cartId}/items` | Add or increase a variant quantity |
 | `PATCH` | `/carts/{cartId}/items/{itemId}` | Set a cart item quantity |
 | `DELETE` | `/carts/{cartId}/items/{itemId}` | Remove a cart item |
-| `POST` | `/checkout` | Returns `503` until Catalog publishes its authoritative variant and price API |
+| `POST` | `/checkout` | Start or check an idempotent pickup checkout |
 | `GET` | `/orders` | List recent orders; supports `status` and `limit`; requires `commerce.orders.read` |
 | `GET` | `/orders/{orderId}` | Read order, items, payment, delivery and reservation history; requires `commerce.orders.read` |
 | `POST` | `/orders/{orderId}/actions` | Execute a validated order lifecycle action; requires `commerce.orders.update_status` |
@@ -92,11 +94,28 @@ browser or accept actor context from public requests. The Commerce API checks
 permissions for each operation and propagates the corresponding Inventory
 permission with the actor ID to Inventory.
 
-Checkout is deliberately unavailable: Commerce must not accept client-supplied
-prices, and Catalog does not yet expose the authoritative API contract required
-to create order snapshots. Cart operations currently persist variant IDs and
-quantities without validating them against Catalog. Monetary amounts are
-returned as decimal strings to preserve integer COP precision.
+Checkout supports guest pickup only. Delivery is rejected until coverage and
+fees are defined. Commerce resolves each variant using Catalog, rejects
+non-purchasable variants, and calculates order snapshots with integer COP
+prices. Cart operations persist variant IDs without validating them against
+Catalog until checkout.
+
+Send a unique, unpredictable `Idempotency-Key` header and retain it with the
+original request. The order, items, payment, cart conversion and `RESERVE_STOCK`
+event are saved in one transaction. The response is `202` with an order ID and
+`inventoryReservationStatus: PENDING` while Inventory is being processed.
+Repeat the same request and key to check the result: `200` means the reservation
+was confirmed; `409` with status `FAILED` means Inventory definitively rejected
+it for insufficient stock. Reusing the key with a different request returns
+`409`. Do not treat `202` as a completed purchase.
+
+The worker retries uncertain results with the same Inventory idempotency key.
+Events remain recoverable after a process restart, and competing workers use
+database leases. Operational errors are logged and retried; monitor the
+`commerce.outbox_events` table for persistent failures. This worker currently
+handles checkout reservations only: existing cancellation, pickup dispatch,
+delivery dispatch and return operations do not yet have the same distributed
+recovery guarantee.
 
 Order actions: `CONFIRM`, `START_PREPARATION`, `MARK_READY`, `DISPATCH`,
 `PICKUP`, `DELIVER`, `DELIVERY_FAILED`, `RETURN_TO_STORE`, `RETRY_DELIVERY`,
@@ -134,6 +153,13 @@ $ pnpm run test:e2e
 # test coverage
 $ pnpm run test:cov
 ```
+
+PostgreSQL checkout integration tests run only when
+`POSTGRES_TEST_DATABASE_URL` points to a dedicated database whose name contains
+`test`. The tests apply the existing migrations, create and delete their own
+rows, and refuse to run if reservation events are already pending. Never use a
+production or shared database. The regular e2e tests mock checkout persistence
+and do not establish end-to-end connectivity to Catalog or Inventory.
 
 ## Deployment
 

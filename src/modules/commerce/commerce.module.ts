@@ -3,6 +3,8 @@ import { CommerceInternalAuthGuard } from '../../common/guards/commerce-internal
 import { CommercePermissionGuard } from '../../common/guards/commerce-permission.guard.js';
 import { DatabaseModule } from '../../infrastructure/database/database.module.js';
 import { InventoryClientModule } from '../inventory-client/inventory-client.module.js';
+import { CatalogClientModule } from '../catalog-client/catalog-client.module.js';
+import { OutboxModule } from '../outbox/outbox.module.js';
 import { OrdersModule } from '../orders/orders.module.js';
 import { PaymentsModule } from '../payments/payments.module.js';
 import {
@@ -13,6 +15,9 @@ import {
 } from './commerce.controller.js';
 import { CartsService } from './carts.service.js';
 import { CheckoutService } from './checkout.service.js';
+import { CHECKOUT_REPOSITORY } from './checkout.contract.js';
+import { DrizzleCheckoutRepository } from './checkout.repository.js';
+import { CheckoutResponseMapper } from './checkout-response.mapper.js';
 import { CommerceRepository } from './commerce.repository.js';
 import {
   CARTS_REPOSITORY,
@@ -27,6 +32,8 @@ import { PaymentsApiService } from './payments-api.service.js';
   imports: [
     DatabaseModule,
     InventoryClientModule,
+    CatalogClientModule,
+    OutboxModule,
     OrdersModule,
     PaymentsModule,
   ],
@@ -38,6 +45,11 @@ import { PaymentsApiService } from './payments-api.service.js';
   ],
   providers: [
     CommerceRepository,
+    DrizzleCheckoutRepository,
+    {
+      provide: CHECKOUT_REPOSITORY,
+      useExisting: DrizzleCheckoutRepository,
+    },
     {
       provide: CARTS_REPOSITORY,
       useExisting: CommerceRepository,
@@ -55,6 +67,7 @@ import { PaymentsApiService } from './payments-api.service.js';
     CommercePermissionGuard,
     CartsService,
     CheckoutService,
+    CheckoutResponseMapper,
     OrdersApiService,
     PaymentsApiService,
   ],

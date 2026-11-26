@@ -10,9 +10,11 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
@@ -20,7 +22,7 @@ import {
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiServiceUnavailableResponse,
+  ApiAcceptedResponse,
   ApiUnauthorizedResponse,
   ApiHeader,
   ApiTags,
@@ -35,6 +37,7 @@ import { CartsService } from './carts.service.js';
 import { CheckoutService } from './checkout.service.js';
 import { OrdersApiService } from './orders-api.service.js';
 import { PaymentsApiService } from './payments-api.service.js';
+import { InventoryReservationStatus } from '../orders/order.constants.js';
 import {
   AddCartItemDto,
   CartIdParamsDto,
@@ -117,14 +120,16 @@ export class CheckoutController {
   constructor(private readonly checkoutService: CheckoutService) {}
 
   @Post()
+  @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({ summary: 'Create an order and reserve inventory' })
-  @ApiServiceUnavailableResponse({
-    description:
-      'Checkout is disabled until Catalog exposes its authoritative variant and price API.',
+  @ApiAcceptedResponse({
+    description: 'Checkout accepted. Repeat the same request and Idempotency-Key to check reservation status.',
   })
-  checkout(
+  @ApiOkResponse({ description: 'The inventory reservation has been confirmed.' })
+  async checkout(
     @Body() body: CheckoutDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) response: Response,
   ) {
     if (!idempotencyKey?.trim() || idempotencyKey.length > 180) {
       throw new BadRequestException(
@@ -132,7 +137,13 @@ export class CheckoutController {
       );
     }
 
-    return this.checkoutService.checkout(body, idempotencyKey.trim());
+    const result = await this.checkoutService.checkout(body, idempotencyKey.trim());
+    if (result.inventoryReservationStatus === InventoryReservationStatus.FAILED) {
+      response.status(HttpStatus.CONFLICT);
+    } else if (result.inventoryReservationStatus !== InventoryReservationStatus.PENDING) {
+      response.status(HttpStatus.OK);
+    }
+    return result;
   }
 }
 

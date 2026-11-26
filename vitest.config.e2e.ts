@@ -12,6 +12,9 @@ process.env.INVENTORY_LOCATION_ID ||=
   '00000000-0000-4000-8000-000000000001';
 process.env.COMMERCE_INTERNAL_API_TOKEN ||=
   'test-commerce-internal-token-000000000000';
+process.env.CATALOG_API_URL ||= 'http://127.0.0.1:3002';
+process.env.CATALOG_SERVICE_TOKEN ||=
+  'test-catalog-service-token-000000000000';
 
 export default defineConfig({
   resolve: { tsconfigPaths: true },

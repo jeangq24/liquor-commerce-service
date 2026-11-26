@@ -4,6 +4,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from './../src/app.module.js';
+import { CheckoutService } from './../src/modules/commerce/checkout.service.js';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
@@ -11,7 +12,16 @@ describe('AppController (e2e)', () => {
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(CheckoutService)
+      .useValue({
+        checkout: vi.fn().mockResolvedValue({
+          orderId: '00000000-0000-4000-8000-000000000003',
+          status: 'PENDING',
+          inventoryReservationStatus: 'PENDING',
+        }),
+      })
+      .compile();
 
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api/commerce');
@@ -64,7 +74,7 @@ describe('AppController (e2e)', () => {
       .expect(403);
   });
 
-  it('keeps checkout unavailable until Catalog has an authoritative API', () => {
+  it('accepts checkout while inventory reservation is pending', () => {
     return request(app.getHttpServer())
       .post('/api/commerce/checkout')
       .set('Idempotency-Key', 'checkout-deferred-test')
@@ -75,8 +85,39 @@ describe('AppController (e2e)', () => {
         fulfillmentType: 'PICKUP',
         paymentMethod: 'CASH',
       })
-      .expect(503);
+      .expect(202)
+      .expect(({ body }) => {
+        expect(body.inventoryReservationStatus).toBe('PENDING');
+      });
   });
+
+  it.each([
+    ['RESERVED', 200],
+    ['FAILED', 409],
+  ] as const)(
+    'reports %s checkout reservation with HTTP %i',
+    (inventoryReservationStatus, httpStatus) => {
+      vi.spyOn(app.get(CheckoutService), 'checkout').mockResolvedValue({
+        orderId: '00000000-0000-4000-8000-000000000003',
+        status: inventoryReservationStatus === 'FAILED' ? 'CANCELLED' : 'PENDING',
+        inventoryReservationStatus,
+      });
+      return request(app.getHttpServer())
+        .post('/api/commerce/checkout')
+        .set('Idempotency-Key', 'checkout-test')
+        .send({
+          cartId: '00000000-0000-4000-8000-000000000002',
+          customerName: 'Test Customer',
+          customerPhone: '3000000000',
+          fulfillmentType: 'PICKUP',
+          paymentMethod: 'CASH',
+        })
+        .expect(httpStatus)
+        .expect(({ body }) => {
+          expect(body.inventoryReservationStatus).toBe(inventoryReservationStatus);
+        });
+    },
+  );
 
   it('serves the generated OpenAPI document', () => {
     return request(app.getHttpServer())
