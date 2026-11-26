@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { isUUID } from 'class-validator';
 import { MAX_INVENTORY_TIMEOUT_MS } from './modules/inventory-client/inventory-client.constants.js';
+import { DEFAULT_CATALOG_TIMEOUT_MS, MAX_CATALOG_TIMEOUT_MS } from './modules/catalog-client/catalog-client.constants.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { DatabaseModule } from './infrastructure/database/database.module.js';
@@ -41,9 +42,26 @@ import { CommerceModule } from './modules/commerce/commerce.module.js';
           throw new Error('INVENTORY_API_URL must be a valid HTTP(S) URL.');
         }
 
+        const catalogUrl = configuration.CATALOG_API_URL;
+        if (typeof catalogUrl !== 'string' || !URL.canParse(catalogUrl)) {
+          throw new Error('CATALOG_API_URL must be a valid HTTP(S) URL.');
+        }
+        const parsedCatalogUrl = new URL(catalogUrl);
+        if (
+          !['http:', 'https:'].includes(parsedCatalogUrl.protocol) ||
+          !['', '/'].includes(parsedCatalogUrl.pathname) ||
+          parsedCatalogUrl.username ||
+          parsedCatalogUrl.password ||
+          parsedCatalogUrl.search ||
+          parsedCatalogUrl.hash
+        ) {
+          throw new Error('CATALOG_API_URL must be a valid HTTP(S) URL.');
+        }
+
         for (const tokenName of [
           'INVENTORY_SERVICE_TOKEN',
           'COMMERCE_INTERNAL_API_TOKEN',
+          'CATALOG_SERVICE_TOKEN',
         ]) {
           const token = configuration[tokenName];
           if (
@@ -52,6 +70,18 @@ import { CommerceModule } from './modules/commerce/commerce.module.js';
             token.length < 32
           ) {
             throw new Error(`${tokenName} must contain at least 32 characters.`);
+          }
+          const catalogTimeout = Number(
+            configuration.CATALOG_TIMEOUT_MS ?? DEFAULT_CATALOG_TIMEOUT_MS,
+          );
+          if (
+            !Number.isSafeInteger(catalogTimeout) ||
+            catalogTimeout < 1 ||
+            catalogTimeout > MAX_CATALOG_TIMEOUT_MS
+          ) {
+            throw new Error(
+              `CATALOG_TIMEOUT_MS must be an integer between 1 and ${MAX_CATALOG_TIMEOUT_MS}.`,
+            );
           }
         }
         if (

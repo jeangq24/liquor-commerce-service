@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { isUUID } from 'class-validator';
+import { InventoryInsufficientStockException } from './inventory-insufficient-stock.exception.js';
 import {
   INVENTORY_HTTP_TRANSPORT,
   type InventoryActor,
@@ -271,6 +272,26 @@ export class InventoryClientService implements InventoryClient {
         throw new NotFoundException('Inventory resource was not found.');
       }
       if (response.status === HttpStatus.CONFLICT) {
+        if (path === '/internal/v1/stock/reservations') {
+          let errorPayload: unknown;
+          try {
+            errorPayload = await response.json();
+          } catch (error) {
+            throw new BadGatewayException(
+              'Inventory returned an invalid conflict response.',
+              { cause: error },
+            );
+          }
+          if (
+            isRecord(errorPayload) &&
+            typeof errorPayload.message === 'string' &&
+            /^Insufficient available stock for variant [0-9a-f-]{36}$/i.test(
+              errorPayload.message,
+            )
+          ) {
+            throw new InventoryInsufficientStockException();
+          }
+        }
         throw new ConflictException('Inventory rejected the stock operation.');
       }
       if (response.status >= HttpStatus.INTERNAL_SERVER_ERROR) {

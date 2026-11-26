@@ -27,6 +27,7 @@ import {
 } from '../orders/order.constants.js';
 import {
   CustomerType,
+  CartStatus,
   DeliveryAttemptMutationKind,
   DeliveryAttemptStatus,
 } from './commerce.constants.js';
@@ -80,40 +81,64 @@ export class CommerceRepository
   }
 
   async addCartItem(cartId: string, variantId: string, quantity: number) {
-    const [item] = await this.database
-      .insert(cartItems)
-      .values({ cartId, variantId, quantity })
-      .onConflictDoUpdate({
-        target: [cartItems.cartId, cartItems.variantId],
-        set: {
-          quantity: sql`${cartItems.quantity} + ${quantity}`,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-    if (!item) {
-      throw new InternalServerErrorException(
-        'The cart item could not be persisted.',
-      );
-    }
-    return item;
+    return this.database.transaction(async (transaction) => {
+      await this.lockActiveCart(transaction, cartId);
+      const [item] = await transaction
+        .insert(cartItems)
+        .values({ cartId, variantId, quantity })
+        .onConflictDoUpdate({
+          target: [cartItems.cartId, cartItems.variantId],
+          set: {
+            quantity: sql`${cartItems.quantity} + ${quantity}`,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      if (!item) {
+        throw new InternalServerErrorException(
+          'The cart item could not be persisted.',
+        );
+      }
+      return item;
+    });
   }
 
   async updateCartItem(cartId: string, itemId: string, quantity: number) {
-    const [item] = await this.database
-      .update(cartItems)
-      .set({ quantity, updatedAt: new Date() })
-      .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cartId)))
-      .returning();
-    return item ?? null;
+    return this.database.transaction(async (transaction) => {
+      await this.lockActiveCart(transaction, cartId);
+      const [item] = await transaction
+        .update(cartItems)
+        .set({ quantity, updatedAt: new Date() })
+        .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cartId)))
+        .returning();
+      return item ?? null;
+    });
   }
 
   async deleteCartItem(cartId: string, itemId: string): Promise<boolean> {
-    const deleted = await this.database
-      .delete(cartItems)
-      .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cartId)))
-      .returning({ id: cartItems.id });
-    return deleted.length > 0;
+    return this.database.transaction(async (transaction) => {
+      await this.lockActiveCart(transaction, cartId);
+      const deleted = await transaction
+        .delete(cartItems)
+        .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cartId)))
+        .returning({ id: cartItems.id });
+      return deleted.length > 0;
+    });
+  }
+
+  private async lockActiveCart(transaction: DatabaseTransaction, cartId: string): Promise<void> {
+    const [cart] = await transaction
+      .select({ status: carts.status })
+      .from(carts)
+      .where(eq(carts.id, cartId))
+      .for('update')
+      .limit(1);
+    if (!cart) {
+      throw new NotFoundException(`Cart ${cartId} was not found.`);
+    }
+    if (cart.status !== CartStatus.ACTIVE) {
+      throw new ConflictException(`Cart ${cartId} cannot be changed while it is ${cart.status}.`);
+    }
   }
 
   async getOrder(orderId: string) {
@@ -188,23 +213,45 @@ export class CommerceRepository
     reference?: string,
     verifiedBy?: string,
   ) {
-    const [payment] = await this.database
-      .update(payments)
-      .set({
-        status,
-        reference: reference ?? undefined,
-        paidAt: status === PaymentStatus.APPROVED ? new Date() : undefined,
-        verifiedBy: verifiedBy ?? undefined,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(payments.id, paymentId),
-          eq(payments.status, expectedStatus),
-        ),
-      )
-      .returning();
-    return payment ?? null;
+    return this.database.transaction(async (transaction) => {
+      const [payment] = await transaction
+        .select({ orderId: payments.orderId })
+        .from(payments)
+        .where(eq(payments.id, paymentId))
+        .limit(1);
+      if (!payment) {
+        return null;
+      }
+      const [order] = await transaction
+        .select({
+          status: orders.status,
+          inventoryReservationStatus: orders.inventoryReservationStatus,
+        })
+        .from(orders)
+        .where(eq(orders.id, payment.orderId))
+        .for('update')
+        .limit(1);
+      if (
+        !order ||
+        order.status === OrderStatus.CANCELLED ||
+        order.inventoryReservationStatus === InventoryReservationStatus.PENDING ||
+        order.inventoryReservationStatus === InventoryReservationStatus.FAILED
+      ) {
+        throw new ConflictException('Payment cannot be changed until the order reservation is confirmed.');
+      }
+      const [updated] = await transaction
+        .update(payments)
+        .set({
+          status,
+          reference: reference ?? undefined,
+          paidAt: status === PaymentStatus.APPROVED ? new Date() : undefined,
+          verifiedBy: verifiedBy ?? undefined,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(payments.id, paymentId), eq(payments.status, expectedStatus)))
+        .returning();
+      return updated ?? null;
+    });
   }
 
   async getReservationForOrder(orderId: string) {

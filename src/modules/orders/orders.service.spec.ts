@@ -25,12 +25,10 @@ describe('OrdersService', () => {
     ...overrides,
   });
 
-  it('requires a confirmed reservation before preparation', () => {
-    const confirmed = service.confirm(makeOrder());
-
-    expect(() => service.startPreparation(confirmed)).toThrow(
-      ConflictException,
-    );
+  it('requires a confirmed reservation before confirming and preparing an order', () => {
+    expect(() => service.confirm(makeOrder())).toThrow(ConflictException);
+    const confirmed = service.confirm(makeOrder({ inventoryReservationStatus: 'RESERVED' }));
+    expect(service.startPreparation(confirmed).status).toBe('PREPARING');
   });
 
   it('requires an approved transfer and confirmed dispatch before delivery', () => {

@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import type { InventoryHttpTransport } from './inventory-client.contract.js';
 import { INVENTORY_AVAILABILITY_BATCH_SIZE } from './inventory-client.constants.js';
 import { InventoryClientService } from './inventory-client.service.js';
+import { InventoryInsufficientStockException } from './inventory-insufficient-stock.exception.js';
 
 describe('InventoryClientService', () => {
   const orderId = '00000000-0000-4000-8000-000000000002';
@@ -160,6 +161,24 @@ describe('InventoryClientService', () => {
         items: [{ variantId: reservationId, quantity: 2 }],
       }),
     );
+  });
+
+  it('distinguishes confirmed insufficient stock from other reservation conflicts', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        message: `Insufficient available stock for variant ${reservationId}`,
+      }), { status: 409 }),
+    );
+    await expect(
+      service.reserve(orderId, 'checkout-key', [{ variantId: reservationId, quantity: 2 }]),
+    ).rejects.toBeInstanceOf(InventoryInsufficientStockException);
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: 'An active reservation already exists' }), { status: 409 }),
+    );
+    await expect(
+      service.reserve(orderId, 'checkout-key', [{ variantId: reservationId, quantity: 2 }]),
+    ).rejects.not.toBeInstanceOf(InventoryInsufficientStockException);
   });
 
   it('rejects invalid idempotency keys before contacting Inventory', async () => {

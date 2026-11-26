@@ -29,6 +29,7 @@ export interface PaymentLifecycleState {
 export class OrdersService {
   confirm(state: OrderLifecycleState): OrderLifecycleState {
     this.assertStatus(state, OrderStatus.PENDING);
+    this.assertReservationStatus(state, InventoryReservationStatus.RESERVED);
     return this.withStatus(state, OrderStatus.CONFIRMED);
   }
 
