@@ -1,236 +1,139 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# LicoresYaaa Commerce
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Servicio REST responsable de los carritos, pedidos y pagos de LicoresYaaa. Mantiene los datos comerciales en PostgreSQL y se comunica por HTTP con Catalog para consultar variantes y precios, y con Inventory para gestionar existencias.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Alcance
 
-## Description
+- Creación y modificación de carritos de invitados y consulta de disponibilidad.
+- Finalización de compra para **recogida**, con precios obtenidos de Catalog y reserva de inventario asíncrona.
+- Consulta y transición del ciclo de vida de pedidos y pagos.
+- Registro de datos e historial de pedidos, pagos, entregas y reservas.
+- Integración interna con Inventory para disponibilidad, reservas, liberaciones, despachos y devoluciones.
 
-REST API for the LicoresYaaa Commerce service, built with NestJS, PostgreSQL and Drizzle ORM.
+El checkout no admite domicilios ni compras autenticadas. Las rutas de pedidos y pagos son internas y requieren un BFF de confianza. Commerce no modifica directamente las tablas de Catalog ni de Inventory.
 
-## Project setup
+## Tecnologías y estructura
 
-```bash
-$ pnpm install
-```
+El servicio utiliza Node.js, TypeScript, NestJS con Express, PostgreSQL, Drizzle ORM y Drizzle Kit. La documentación de la API se genera con `@nestjs/swagger`; las pruebas utilizan Vitest y Supertest.
 
-## Database setup
+- `src/modules/commerce`: API, casos de uso, repositorios, DTO y mapeo de respuestas comerciales.
+- `src/modules/orders` y `src/modules/payments`: reglas de los ciclos de vida de pedidos y pagos.
+- `src/modules/catalog-client` y `src/modules/inventory-client`: clientes HTTP internos.
+- `src/modules/outbox`: procesamiento recuperable de reservas de checkout.
+- `src/infrastructure/database`: conexión y esquemas de Drizzle.
+- `src/common`: autenticación, permisos y contexto del actor.
+- `drizzle/`: migraciones SQL y metadatos de Drizzle Kit.
+- `test/`: pruebas HTTP de extremo a extremo.
 
-Create a local environment file from the example and set `DATABASE_URL` to your PostgreSQL connection string:
+## Requisitos
 
-```powershell
-Copy-Item .env.example .env
-```
+- Node.js y pnpm. La configuración actual se ha comprobado localmente con Node.js 24 y pnpm 12; el proyecto no declara una versión mínima propia.
+- PostgreSQL accesible y una base de datos creada para Commerce.
+- Instancias accesibles de Catalog e Inventory y sus credenciales para ejecutar los flujos que dependen de esos servicios.
 
-Drizzle Kit reads schema definitions from `src/infrastructure/database/schema/` and writes migrations to `drizzle/`. After adding or changing schema definitions, generate and apply migrations with:
+## Instalación y configuración local
 
-```bash
-pnpm db:generate
-pnpm db:migrate
-```
+1. Instala las dependencias desde la raíz del repositorio:
 
-The application requires a valid PostgreSQL `DATABASE_URL` at startup.
+   ```bash
+   pnpm install
+   ```
 
-## Commerce API
+2. Crea el archivo local de configuración y completa sus valores:
 
-Copy `.env.example` to `.env` and configure the PostgreSQL, Catalog and Inventory service
-settings before starting the API:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
 
-```powershell
-Copy-Item .env.example .env
-pnpm db:migrate
-pnpm start:dev
-```
+3. Configura la conexión PostgreSQL, los servicios internos, la ubicación de Inventory y los tres tokens descritos a continuación. No almacenes secretos en el repositorio.
+4. Aplica las migraciones existentes e inicia el servicio:
 
-`INVENTORY_API_URL`, `INVENTORY_SERVICE_TOKEN` and `INVENTORY_LOCATION_ID` must
-point to the real Inventory service and configured location. The service token
-must match Inventory's `INTERNAL_API_TOKEN`. `COMMERCE_INTERNAL_API_TOKEN` is a
-separate shared credential for the trusted BFF. `CATALOG_API_URL` points to
-Catalog and `CATALOG_SERVICE_TOKEN` must match Catalog's
-`CATALOG_SERVICE_API_TOKEN`. All three tokens must contain at least 32
-characters. `HOST` defaults to `0.0.0.0`; OpenAPI is available at
-`http://localhost:3001/docs`, and the API base path is
-`http://localhost:3001/api/commerce`.
+   ```bash
+   pnpm db:migrate
+   pnpm start:dev
+   ```
 
-Available operations:
+Por defecto, el servicio escucha en `0.0.0.0:3001`. La configuración de ejemplo usa Catalog en `localhost:3002` e Inventory en `localhost:3000`; ajusta estas direcciones al entorno real.
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/carts` | Create a guest cart |
-| `GET` | `/carts/{cartId}` | Read a cart |
-| `GET` | `/carts/{cartId}/availability` | Check cart quantities against Inventory |
-| `POST` | `/carts/{cartId}/items` | Add or increase a variant quantity |
-| `PATCH` | `/carts/{cartId}/items/{itemId}` | Set a cart item quantity |
-| `DELETE` | `/carts/{cartId}/items/{itemId}` | Remove a cart item |
-| `POST` | `/checkout` | Start or check an idempotent pickup checkout |
-| `GET` | `/orders` | List recent orders; supports `status` and `limit`; requires `commerce.orders.read` |
-| `GET` | `/orders/{orderId}` | Read order, items, payment, delivery and reservation history; requires `commerce.orders.read` |
-| `POST` | `/orders/{orderId}/actions` | Execute a validated order lifecycle action; requires `commerce.orders.update_status` |
-| `GET` | `/payments/{paymentId}` | Read payment state; requires `commerce.payments.read` |
-| `POST` | `/payments/{paymentId}/actions` | Execute an authorized payment action |
+## Variables de entorno
 
-Order and payment endpoints require `Authorization: Bearer <COMMERCE_INTERNAL_API_TOKEN>`,
-`x-actor-id` and comma-separated `x-actor-permissions` headers. These headers
-must be injected only by a trusted BFF after it verifies the user's Supabase JWT
-and resolves permissions. Do not expose this internal contract directly to a
-browser or accept actor context from public requests. The Commerce API checks
-permissions for each operation and propagates the corresponding Inventory
-permission with the actor ID to Inventory.
+| Variable                      | Propósito                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                | URL de conexión PostgreSQL de Commerce; obligatoria para la aplicación y Drizzle Kit.             |
+| `NODE_ENV`                    | Entorno de ejecución de Node.js. El ejemplo usa `development`.                                    |
+| `HOST`                        | Dirección de escucha; por defecto `0.0.0.0`.                                                      |
+| `PORT`                        | Puerto de escucha; por defecto `3001`.                                                            |
+| `COMMERCE_INTERNAL_API_TOKEN` | Token compartido con el BFF para autenticar operaciones internas de pedidos y pagos.              |
+| `INVENTORY_API_URL`           | URL base HTTP o HTTPS de Inventory, sin ruta, credenciales ni parámetros.                         |
+| `INVENTORY_SERVICE_TOKEN`     | Token enviado a Inventory; debe coincidir con `INTERNAL_API_TOKEN` de su despliegue.              |
+| `INVENTORY_LOCATION_ID`       | UUID v4 de la ubicación de Inventory usada para las operaciones de stock.                         |
+| `INVENTORY_TIMEOUT_MS`        | Tiempo máximo por solicitud a Inventory en milisegundos; por defecto `5000`, entre `1` y `60000`. |
+| `CATALOG_API_URL`             | URL base HTTP o HTTPS de Catalog, sin ruta, credenciales ni parámetros.                           |
+| `CATALOG_SERVICE_TOKEN`       | Token enviado a Catalog; debe coincidir con `CATALOG_SERVICE_API_TOKEN` de su despliegue.         |
+| `CATALOG_TIMEOUT_MS`          | Tiempo máximo por solicitud a Catalog en milisegundos; por defecto `5000`, entre `1` y `60000`.   |
+| `POSTGRES_TEST_DATABASE_URL`  | Opcional. URL de una base de datos PostgreSQL exclusiva y desechable para pruebas de integración. |
 
-Checkout supports guest pickup only. Delivery is rejected until coverage and
-fees are defined. Commerce resolves each variant using Catalog, rejects
-non-purchasable variants, and calculates order snapshots with integer COP
-prices. Cart operations persist variant IDs without validating them against
-Catalog until checkout.
+Los tres tokens obligatorios deben tener al menos 32 caracteres y no contener espacios al principio ni al final. Usa valores independientes y aleatorios.
 
-Send a unique, unpredictable `Idempotency-Key` header and retain it with the
-original request. The order, items, payment, cart conversion and `RESERVE_STOCK`
-event are saved in one transaction. The response is `202` with an order ID and
-`inventoryReservationStatus: PENDING` while Inventory is being processed.
-Repeat the same request and key to check the result: `200` means the reservation
-was confirmed; `409` with status `FAILED` means Inventory definitively rejected
-it for insufficient stock. Reusing the key with a different request returns
-`409`. Do not treat `202` as a completed purchase.
+## Comandos
 
-The worker retries uncertain results with the same Inventory idempotency key.
-Events remain recoverable after a process restart, and competing workers use
-database leases. Operational errors are logged and retried; monitor the
-`commerce.outbox_events` table for persistent failures. This worker currently
-handles checkout reservations only: existing cancellation, pickup dispatch,
-delivery dispatch and return operations do not yet have the same distributed
-recovery guarantee.
+| Comando            | Uso                                                                           |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `pnpm start`       | Iniciar la aplicación.                                                        |
+| `pnpm start:dev`   | Iniciar con recarga durante el desarrollo.                                    |
+| `pnpm start:debug` | Iniciar en modo de depuración con recarga.                                    |
+| `pnpm build`       | Compilar el proyecto.                                                         |
+| `pnpm start:prod`  | Ejecutar la aplicación compilada; requiere ejecutar `pnpm build` previamente. |
+| `pnpm lint`        | Analizar el código de `src/` y `test/`.                                       |
+| `pnpm format`      | Aplicar el formato de Prettier a `src/` y `test/`.                            |
+| `pnpm test`        | Ejecutar las pruebas unitarias y de integración configuradas.                 |
+| `pnpm test:watch`  | Ejecutar las pruebas en modo de observación.                                  |
+| `pnpm test:cov`    | Ejecutar pruebas con cobertura.                                               |
+| `pnpm test:debug`  | Ejecutar pruebas con el depurador.                                            |
+| `pnpm test:e2e`    | Ejecutar las pruebas HTTP de extremo a extremo.                               |
+| `pnpm db:generate` | Generar migraciones a partir del esquema de Commerce.                         |
+| `pnpm db:migrate`  | Aplicar las migraciones pendientes.                                           |
 
-Order actions: `CONFIRM`, `START_PREPARATION`, `MARK_READY`, `DISPATCH`,
-`PICKUP`, `DELIVER`, `DELIVERY_FAILED`, `RETURN_TO_STORE`, `RETRY_DELIVERY`,
-`CANCEL`. `DELIVERY_FAILED`, `RETURN_TO_STORE` and `CANCEL` require a `reason`.
-`RETURN_TO_STORE` also requires `items`, with `variantId`, `quantityReceived`
-and `quantityRestockable`; quantities are checked against the order before
-Commerce invokes Inventory's return endpoint.
-Payment actions: `SUBMIT_TRANSFER`, `APPROVE_TRANSFER`, `REJECT_TRANSFER`,
-`RECORD_CASH`. Payment actions require `commerce.payments.review`,
-`commerce.payments.approve` or `commerce.payments.record_cash` according to
-the requested action.
+## Base de datos y migraciones
 
-## Compile and run the project
+Drizzle Kit carga `DATABASE_URL` desde el entorno o `.env`, lee `src/infrastructure/database/schema/commerce.schema.ts` y guarda las migraciones en `drizzle/`. Para una base nueva, créala en PostgreSQL y ejecuta `pnpm db:migrate`. Si cambias el esquema, usa `pnpm db:generate`, revisa la migración generada y aplícala con `pnpm db:migrate`.
 
-```bash
-# development
-$ pnpm run start
+Las pruebas con PostgreSQL real se habilitan con `POSTGRES_TEST_DATABASE_URL`. Su base debe ser exclusiva, contener `test` en el nombre y no tener eventos de reserva pendientes: las pruebas aplican migraciones y crean y eliminan sus propios registros. Nunca uses una base compartida o de producción. Las pruebas HTTP también utilizan clientes simulados y no demuestran conectividad real con Catalog o Inventory.
 
-# watch mode
-$ pnpm run start:dev
+## API y documentación
 
-# production mode
-$ pnpm run start:prod
-```
+El prefijo de la API es `/api/commerce`. Con la configuración predeterminada, Swagger se encuentra en `http://localhost:3001/docs` y el documento OpenAPI en `http://localhost:3001/docs-json`.
 
-## Run tests
+| Método   | Ruta bajo el prefijo             | Operación                                                     |
+| -------- | -------------------------------- | ------------------------------------------------------------- |
+| `GET`    | `/`                              | Respuesta básica del servicio; no comprueba sus dependencias. |
+| `POST`   | `/carts`                         | Crear un carrito de invitado.                                 |
+| `GET`    | `/carts/{cartId}`                | Consultar un carrito y sus artículos.                         |
+| `GET`    | `/carts/{cartId}/availability`   | Consultar disponibilidad en Inventory.                        |
+| `POST`   | `/carts/{cartId}/items`          | Agregar una variante o incrementar su cantidad.               |
+| `PATCH`  | `/carts/{cartId}/items/{itemId}` | Actualizar la cantidad de un artículo.                        |
+| `DELETE` | `/carts/{cartId}/items/{itemId}` | Eliminar un artículo.                                         |
+| `POST`   | `/checkout`                      | Iniciar o consultar una compra idempotente para recogida.     |
+| `GET`    | `/orders`                        | Consultar pedidos recientes; admite `status` y `limit`.       |
+| `GET`    | `/orders/{orderId}`              | Consultar el detalle de un pedido.                            |
+| `POST`   | `/orders/{orderId}/actions`      | Ejecutar una acción del pedido.                               |
+| `GET`    | `/payments/{paymentId}`          | Consultar un pago.                                            |
+| `POST`   | `/payments/{paymentId}/actions`  | Ejecutar una acción del pago.                                 |
 
-```bash
-# unit tests
-$ pnpm run test
+Las operaciones de pedidos y pagos exigen `Authorization: Bearer <COMMERCE_INTERNAL_API_TOKEN>`, `x-actor-id` con un UUID v4 y `x-actor-permissions` con permisos separados por comas. El contrato presupone que el BFF de confianza verifica el JWT de Supabase y los permisos del usuario antes de proporcionar este contexto; Commerce no verifica ese JWT. No se debe aceptar el contexto directamente desde un navegador. Los permisos requeridos se detallan en Swagger.
 
-# e2e tests
-$ pnpm run test:e2e
+Las acciones de pedido son `CONFIRM`, `START_PREPARATION`, `MARK_READY`, `DISPATCH`, `PICKUP`, `DELIVER`, `DELIVERY_FAILED`, `RETURN_TO_STORE`, `RETRY_DELIVERY` y `CANCEL`. `DELIVERY_FAILED`, `RETURN_TO_STORE` y `CANCEL` requieren `reason`; `RETURN_TO_STORE` también requiere `items` con las cantidades devueltas. Las acciones de pago son `SUBMIT_TRANSFER`, `APPROVE_TRANSFER`, `REJECT_TRANSFER` y `RECORD_CASH`.
 
-# test coverage
-$ pnpm run test:cov
-```
+## Checkout e integraciones
 
-PostgreSQL checkout integration tests run only when
-`POSTGRES_TEST_DATABASE_URL` points to a dedicated database whose name contains
-`test`. The tests apply the existing migrations, create and delete their own
-rows, and refuse to run if reservation events are already pending. Never use a
-production or shared database. The regular e2e tests mock checkout persistence
-and do not establish end-to-end connectivity to Catalog or Inventory.
+Commerce consulta `GET /internal/v1/variants/{id}` de Catalog durante el checkout, comprueba que las variantes se puedan comprar y calcula los importes en pesos colombianos como enteros. Al agregar artículos al carrito solo se guarda el identificador de variante; la comprobación en Catalog ocurre al finalizar la compra. Los importes de las respuestas de pedidos y pagos se representan como cadenas.
 
-## Deployment
+Envía una `Idempotency-Key` única y no vacía, de hasta 180 caracteres, y consérvala junto con la solicitud original. Commerce guarda en una transacción el pedido, sus artículos, el pago pendiente, la conversión del carrito y el evento `RESERVE_STOCK`:
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+- `202`: la reserva sigue pendiente; no indica una compra completada.
+- Repite la misma solicitud y clave: `200` indica que la reserva ya no está pendiente ni fallida; consulta los estados devueltos.
+- `409`: puede indicar falta de stock o un conflicto, como reutilizar la clave con otros datos. La respuesta por falta de stock incluye `inventoryReservationStatus: FAILED`.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+El procesador Outbox reintenta los resultados inciertos con la misma clave de Inventory y recupera eventos tras un reinicio. Es necesario vigilar errores persistentes y la tabla `commerce.outbox_events`. **Esta recuperación solo cubre la reserva inicial del checkout**: las cancelaciones, los despachos y las devoluciones todavía pueden quedar desincronizados si Inventory confirma una operación y falla el registro local. La cancelación también se bloquea mientras la reserva inicial está pendiente y después de aprobar un pago, hasta definir la política de reembolso.
 
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Observability
-
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-To add it to this project, run this and approve the code it prints at [observe.nestjs.com/link](https://observe.nestjs.com/link) - signing up for free if you have no account:
-
-```bash
-$ npx @nestjs/observe link
-```
-
-It installs `@nestjs/observe`, wires it into `AppModule` and `main.ts`, and writes the app key and secret into `.env`, which every `nest start` script (`start`, `start:dev`, `start:debug`) then loads. In production, set `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment instead.
-
-Or do it by hand:
-
-```bash
-$ pnpm install @nestjs/observe
-```
-
-Then follow the [setup guide](https://docs.nestjs.com/observability/sdk) - it takes a single import and an app key.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Inventory es el responsable de las existencias. Commerce usa su API interna con el token de servicio y los permisos correspondientes; las acciones de pedidos propagan el identificador del actor cuando corresponde.
