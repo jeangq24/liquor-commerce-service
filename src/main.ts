@@ -18,9 +18,9 @@ async function bootstrap() {
   );
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('LicoresYaaa Commerce API')
+    .setTitle('API de Commerce de LicoresYaaa')
     .setDescription(
-      'REST API for Commerce. Order and payment operations require a trusted internal caller. Pickup checkout is processed asynchronously.',
+      'API REST de Commerce. Las operaciones de pedidos y pagos requieren un cliente interno de confianza. El checkout para recogida se procesa de forma asíncrona.',
     )
     .setVersion('1.0')
     .addBearerAuth()

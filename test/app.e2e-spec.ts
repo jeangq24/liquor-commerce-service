@@ -33,7 +33,10 @@ describe('AppController (e2e)', () => {
       }),
     );
     const swaggerConfig = new DocumentBuilder()
-      .setTitle('LicoresYaaa Commerce API')
+      .setTitle('API de Commerce de LicoresYaaa')
+      .setDescription(
+        'API REST de Commerce. Las operaciones de pedidos y pagos requieren un cliente interno de confianza. El checkout para recogida se procesa de forma asíncrona.',
+      )
       .setVersion('1.0')
       .addBearerAuth()
       .build();
@@ -57,18 +60,13 @@ describe('AppController (e2e)', () => {
   });
 
   it('requires trusted authentication for order operations', () => {
-    return request(app.getHttpServer())
-      .get('/api/commerce/orders')
-      .expect(401);
+    return request(app.getHttpServer()).get('/api/commerce/orders').expect(401);
   });
 
   it('rejects authenticated callers without the required order permission', () => {
     return request(app.getHttpServer())
       .get('/api/commerce/orders')
-      .set(
-        'Authorization',
-        `Bearer ${process.env.COMMERCE_INTERNAL_API_TOKEN}`,
-      )
+      .set('Authorization', `Bearer ${process.env.COMMERCE_INTERNAL_API_TOKEN}`)
       .set('x-actor-id', '00000000-0000-4000-8000-000000000004')
       .set('x-actor-permissions', 'commerce.payments.read')
       .expect(403);
@@ -99,7 +97,8 @@ describe('AppController (e2e)', () => {
     (inventoryReservationStatus, httpStatus) => {
       vi.spyOn(app.get(CheckoutService), 'checkout').mockResolvedValue({
         orderId: '00000000-0000-4000-8000-000000000003',
-        status: inventoryReservationStatus === 'FAILED' ? 'CANCELLED' : 'PENDING',
+        status:
+          inventoryReservationStatus === 'FAILED' ? 'CANCELLED' : 'PENDING',
         inventoryReservationStatus,
       });
       return request(app.getHttpServer())
@@ -114,7 +113,9 @@ describe('AppController (e2e)', () => {
         })
         .expect(httpStatus)
         .expect(({ body }) => {
-          expect(body.inventoryReservationStatus).toBe(inventoryReservationStatus);
+          expect(body.inventoryReservationStatus).toBe(
+            inventoryReservationStatus,
+          );
         });
     },
   );
@@ -126,7 +127,38 @@ describe('AppController (e2e)', () => {
       .expect(({ body }) => {
         expect(body.paths['/api/commerce/checkout']).toBeDefined();
         expect(body.paths['/api/commerce/orders/{orderId}']).toBeDefined();
+        expect(body.info.title).toBe('API de Commerce de LicoresYaaa');
+        const checkout = body.paths['/api/commerce/checkout'].post;
+        expect(checkout.summary).toBe(
+          'Crear o consultar una compra para recogida',
+        );
+        expect(checkout.parameters).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              name: 'Idempotency-Key',
+              required: true,
+            }),
+          ]),
+        );
+        expect(checkout.responses['202'].description).toContain('pendiente');
+        expect(
+          body.components.schemas.CheckoutDto.properties.customerName
+            .description,
+        ).toContain('cliente');
+        expect(
+          body.paths['/api/commerce/orders/{orderId}/actions'].post.responses[
+            '201'
+          ],
+        ).toBeDefined();
       });
+  });
+
+  it('serves the Swagger interface', () => {
+    return request(app.getHttpServer())
+      .get('/docs/')
+      .expect(200)
+      .expect('Content-Type', /html/)
+      .expect(/swagger-ui/i);
   });
 
   afterEach(async () => {
